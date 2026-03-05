@@ -313,13 +313,50 @@ def unlock_all_memories(uid: str):
 # ********* MIGRATION HELPERS **********
 # **************************************
 
+def get_memories(
+    uid: str,
+    limit: int = 100,
+    offset: int = 0,
+    categories: List[str] = [],
+    start_date: Optional[datetime] = None,
+    end_date: Optional[datetime] = None,
+):
+    logger.info(f'get_memories db {uid} {limit} {offset} {categories} {start_date} {end_date}')
+    
+    try:
+        memories_ref = db.collection(users_collection).document(uid).collection(memories_collection)
 
-def get_memories_to_migrate(uid: str, target_level: str) -> List[dict]:
-    """
+        if categories:
+            memories_ref = memories_ref.where(filter=FieldFilter('category', 'in', categories))
+
+        if start_date:
+            memories_ref = memories_ref.where(filter=FieldFilter('created_at', '>=', start_date))
+
+        if end_date:
+            memories_ref = memories_ref.where(filter=FieldFilter('created_at', '<=', end_date))
+
+        memories_ref = (
+            memories_ref.order_by('scoring', direction=firestore.Query.DESCENDING)
+            .order_by('created_at', direction=firestore.Query.DESCENDING)
+            .limit(limit)
+            .offset(offset)
+        )
+
+        # TODO: put user review to firestore query
+        memories = [doc.to_dict() for doc in memories_ref.stream()]
+        logger.info(f"get_memories {len(memories)}")
+        result = [memory for memory in memories if memory.get('user_review') is not False]
+        return result
+        
+    except Exception as e:
+        print(f"\n❌ FATAL CRASH IN GET_MEMORIES: {e}\n")
+        raise e
+"""def get_memories_to_migrate(uid: str, target_level: str) -> List[dict]:
+    
     Finds all memories that are not at the target protection level by fetching all documents
     and filtering them in memory. This simplifies the code but may be less performant for
     users with a very large number of documents.
-    """
+
     memories_ref = db.collection(users_collection).document(uid).collection(memories_collection)
     all_memories = memories_ref.select(['data_protection_level']).stream()
 
@@ -330,7 +367,7 @@ def get_memories_to_migrate(uid: str, target_level: str) -> List[dict]:
         if target_level != current_level:
             to_migrate.append({'id': doc.id, 'type': 'memory'})
 
-    return to_migrate
+    return to_migrate"""
 
 
 def migrate_memories_level_batch(uid: str, memory_ids: List[str], target_level: str):
