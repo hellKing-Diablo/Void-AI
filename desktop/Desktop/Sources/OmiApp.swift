@@ -80,6 +80,12 @@ struct OMIApp: App {
 
     /// Window title with version number (different for rewind mode)
     private var windowTitle: String {
+        // Keep a distinct title in dev builds so users can visually distinguish
+        // dev and production windows during side-by-side testing.
+        if Bundle.main.bundleIdentifier == "com.omi.desktop-dev" {
+            return Self.launchMode == .rewind ? "Omi Rewind Dev" : "Omi Dev"
+        }
+
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
         let baseName = Self.launchMode == .rewind ? "omi Rewind" : UpdateChannel.appDisplayName
         return version.isEmpty ? baseName : "\(baseName) v\(version)"
@@ -91,8 +97,10 @@ struct OMIApp: App {
     }
 
     var body: some Scene {
+        let _ = Self.registerOpenMainWindowHandler(openWindow)
+
         // Main desktop window - same view for both modes, sidebar hidden in rewind mode
-        Window(windowTitle, id: "main") {
+        return Window(windowTitle, id: "main") {
             DesktopHomeView()
                 .withFontScaling()
                 .onAppear {
@@ -131,15 +139,20 @@ struct OMIApp: App {
         // Note: Menu bar is now handled by NSStatusBar in AppDelegate.setupMenuBar()
         // for better reliability on macOS Sequoia (SwiftUI MenuBarExtra had rendering issues)
     }
+
+    private static func registerOpenMainWindowHandler(_ openWindow: OpenWindowAction) {
+        AppDelegate.openMainWindow = { openWindow(id: "main") }
+    }
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    static var openMainWindow: (() -> Void)?
+
     private var sentryHeartbeatTimer: Timer?
     private var globalHotkeyMonitor: Any?
     private var localHotkeyMonitor: Any?
     private var windowObservers: [NSObjectProtocol] = []
     private var statusBarItem: NSStatusItem?
-    private var toggleBarObserver: NSObjectProtocol?
     private var screenCaptureSwitch: NSSwitch?
     private var audioRecordingSwitch: NSSwitch?
 
@@ -147,6 +160,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Ignore SIGPIPE so broken-pipe writes return errors instead of crashing the app.
         // Without this, writing to a dead FFmpeg stdin or agent-bridge pipe kills the process.
         signal(SIGPIPE, SIG_IGN)
+
+        DesktopAutomationBridge.shared.startIfNeeded()
 
         // Strip com.apple.provenance xattrs that macOS adds when Sparkle extracts updates.
         // These break the code signature seal, causing the NEXT update to fail with
@@ -197,6 +212,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Initialize Sparkle auto-updater early so the 10-minute check timer starts at launch
         // Without this, the updater only starts when the user opens Settings or clicks "Check for Updates"
         _ = UpdaterViewModel.shared
+        UpdaterViewModel.shared.checkForUpdatesImmediatelyAfterLaunchIfNeeded()
 
         // Initialize Sentry for crash reporting and error tracking (including dev builds)
         let isDev = AnalyticsManager.isDevBuild
@@ -334,17 +350,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Register global hotkey for Rewind (Cmd+Shift+Space)
         setupGlobalHotkeys()
 
-        // Register Carbon-based global shortcuts for floating control bar (Cmd+\)
+        // Register Carbon-based global shortcuts for floating control bar (Ask Omi)
         GlobalShortcutManager.shared.registerShortcuts()
-        toggleBarObserver = NotificationCenter.default.addObserver(
-            forName: GlobalShortcutManager.toggleFloatingBarNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            Task { @MainActor in
-                FloatingControlBarManager.shared.toggle()
-            }
-        }
 
         // Ensure app always shows in dock as a regular app
         NSApp.setActivationPolicy(.regular)
@@ -549,7 +556,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         log("AppDelegate: Hotkey monitors registered - global=\(globalHotkeyMonitor != nil), local=\(localHotkeyMonitor != nil)")
-        log("AppDelegate: Hotkey is Ctrl+Option+R (⌃⌥R), Ask Omi + Cmd+\\ via Carbon hotkeys")
+        log("AppDelegate: Hotkey is Ctrl+Option+R (⌃⌥R), Ask Omi via Carbon hotkeys")
     }
 
     // Dock icon is always visible — LSUIElement=false and activation policy stays .regular
@@ -745,19 +752,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @MainActor @objc private func openOmiFromMenu() {
         AnalyticsManager.shared.menuBarActionClicked(action: "open_omi")
         NSApp.activate(ignoringOtherApps: true)
-        var foundWindow = false
-        for window in NSApp.windows {
-            if window.title.hasPrefix("Omi") {
-                foundWindow = true
-                window.makeKeyAndOrderFront(nil)
-                window.appearance = NSAppearance(named: .darkAqua)
-            }
+        var foundWindow = revealMainWindowIfAvailable()
+        if !foundWindow {
+            Self.openMainWindow?()
+            foundWindow = revealMainWindowIfAvailable()
         }
         // Dock icon is always visible; just activate the app
         NSApp.activate(ignoringOtherApps: true)
         if !foundWindow {
             log("AppDelegate: [MENUBAR] WARNING - No Omi window found when opening from menu bar")
         }
+    }
+
+    @MainActor private func revealMainWindowIfAvailable() -> Bool {
+        for window in NSApp.windows {
+            let isRealAppWindow = window.frame.width > 300 && window.frame.height > 200
+            let isMenuBarPopover = window.title.hasPrefix("Item-")
+            if isRealAppWindow && !isMenuBarPopover {
+                window.makeKeyAndOrderFront(nil)
+                window.appearance = NSAppearance(named: .darkAqua)
+                return true
+            }
+        }
+        return false
     }
 
     @MainActor @objc private func checkForUpdates() {
@@ -921,11 +938,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSEvent.removeMonitor(monitor)
             localHotkeyMonitor = nil
         }
-        // Remove floating bar observers and shortcuts
-        if let observer = toggleBarObserver {
-            NotificationCenter.default.removeObserver(observer)
-            toggleBarObserver = nil
-        }
+        // Remove floating bar shortcuts
         GlobalShortcutManager.shared.unregisterShortcuts()
 
         // Stop push-to-talk

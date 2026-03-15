@@ -24,7 +24,8 @@ class AppLocalizationsUk extends AppLocalizations {
   String get deleteConversationTitle => 'Видалити розмову?';
 
   @override
-  String get deleteConversationMessage => 'Ви впевнені, що хочете видалити цю розмову? Цю дію не можна скасувати.';
+  String get deleteConversationMessage =>
+      'Це також видалить пов\'язані спогади, завдання та аудіофайли. Цю дію не можна скасувати.';
 
   @override
   String get confirm => 'Підтвердити';
@@ -2677,7 +2678,7 @@ class AppLocalizationsUk extends AppLocalizations {
   String get showAll => 'Показати все →';
 
   @override
-  String get noTasksForToday => 'Немає завдань на сьогодні.\\nЗапитайте Omi про більше завдань або створіть вручну.';
+  String get noTasksForToday => 'Немає завдань на сьогодні.\nЗапитайте Omi про більше завдань або створіть вручну.';
 
   @override
   String get dailyScore => 'ДЕННИЙ РАХУНОК';
@@ -8280,4 +8281,289 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get anyoneWithLinkCanView => 'Будь-хто з посиланням може переглядати';
+
+  @override
+  String get tasksCleanTodayTitle => 'Очистити завдання на сьогодні?';
+
+  @override
+  String get tasksCleanTodayMessage => 'Це видалить лише дедлайни';
+
+  @override
+  String get tasksOverdue => 'Прострочені';
+
+  @override
+  String get phoneCallsWithOmi => 'Дзвінки з Omi';
+
+  @override
+  String get phoneCallsSubtitle => 'Дзвоніть з транскрипцією в реальному часі';
+
+  @override
+  String get phoneSetupStep1Title => 'Підтвердіть свій номер телефону';
+
+  @override
+  String get phoneSetupStep1Subtitle => 'Ми зателефонуємо для підтвердження';
+
+  @override
+  String get phoneSetupStep2Title => 'Введіть код підтвердження';
+
+  @override
+  String get phoneSetupStep2Subtitle => 'Короткий код, який ви введете під час дзвінка';
+
+  @override
+  String get phoneSetupStep3Title => 'Почніть дзвонити своїм контактам';
+
+  @override
+  String get phoneSetupStep3Subtitle => 'З вбудованою живою транскрипцією';
+
+  @override
+  String get phoneGetStarted => 'Розпочати';
+
+  @override
+  String get callRecordingConsentDisclaimer => 'Запис дзвінків може вимагати згоди у вашій юрисдикції';
+
+  @override
+  String get enterYourNumber => 'Введіть свій номер';
+
+  @override
+  String get phoneNumberCallerIdHint => 'Після підтвердження це стане вашим ID дзвінка';
+
+  @override
+  String get phoneNumberHint => 'Номер телефону';
+
+  @override
+  String get failedToStartVerification => 'Не вдалося розпочати підтвердження';
+
+  @override
+  String get phoneContinue => 'Продовжити';
+
+  @override
+  String get verifyYourNumber => 'Підтвердіть свій номер';
+
+  @override
+  String get answerTheCallFrom => 'Відповідайте на дзвінок від';
+
+  @override
+  String get onTheCallEnterThisCode => 'Під час дзвінка введіть цей код';
+
+  @override
+  String get followTheVoiceInstructions => 'Дотримуйтесь голосових інструкцій';
+
+  @override
+  String get statusCalling => 'Дзвоним...';
+
+  @override
+  String get statusCallInProgress => 'Дзвінок йде';
+
+  @override
+  String get statusVerifiedLabel => 'Підтверджено';
+
+  @override
+  String get statusCallMissed => 'Пропущений дзвінок';
+
+  @override
+  String get statusTimedOut => 'Час вийшов';
+
+  @override
+  String get phoneTryAgain => 'Спробувати знову';
+
+  @override
+  String get phonePageTitle => 'Телефон';
+
+  @override
+  String get phoneContactsTab => 'Контакти';
+
+  @override
+  String get phoneKeypadTab => 'Клавіатура';
+
+  @override
+  String get grantContactsAccess => 'Надайте доступ до контактів';
+
+  @override
+  String get phoneAllow => 'Дозволити';
+
+  @override
+  String get phoneSearchHint => 'Пошук';
+
+  @override
+  String get phoneNoContactsFound => 'Контакти не знайдено';
+
+  @override
+  String get phoneEnterNumber => 'Введіть номер';
+
+  @override
+  String get failedToStartCall => 'Не вдалося розпочати дзвінок';
+
+  @override
+  String get callStateConnecting => 'Підключення...';
+
+  @override
+  String get callStateRinging => 'Дзвонить...';
+
+  @override
+  String get callStateEnded => 'Дзвінок завершено';
+
+  @override
+  String get callStateFailed => 'Дзвінок не вдався';
+
+  @override
+  String get transcriptPlaceholder => 'Транскрипція з\'явиться тут...';
+
+  @override
+  String get phoneUnmute => 'Увімкнути звук';
+
+  @override
+  String get phoneMute => 'Вимкнути звук';
+
+  @override
+  String get phoneSpeaker => 'Динамік';
+
+  @override
+  String get phoneEndCall => 'Завершити';
+
+  @override
+  String get phoneCallSettingsTitle => 'Налаштування дзвінків';
+
+  @override
+  String get yourVerifiedNumbers => 'Ваші підтверджені номери';
+
+  @override
+  String get verifiedNumbersDescription => 'Коли ви дзвоните, абонент побачить цей номер';
+
+  @override
+  String get noVerifiedNumbers => 'Немає підтверджених номерів';
+
+  @override
+  String deletePhoneNumberConfirm(String phoneNumber) {
+    return 'Видалити $phoneNumber?';
+  }
+
+  @override
+  String get deletePhoneNumberWarning => 'Для дзвінків потрібно буде повторно підтвердити';
+
+  @override
+  String get phoneDeleteButton => 'Видалити';
+
+  @override
+  String verifiedMinutesAgo(int minutes) {
+    return 'Підтверджено $minutesхв тому';
+  }
+
+  @override
+  String verifiedHoursAgo(int hours) {
+    return 'Підтверджено $hoursгод тому';
+  }
+
+  @override
+  String verifiedDaysAgo(int days) {
+    return 'Підтверджено $daysд тому';
+  }
+
+  @override
+  String verifiedOnDate(String date) {
+    return 'Підтверджено $date';
+  }
+
+  @override
+  String get verifiedFallback => 'Підтверджено';
+
+  @override
+  String get callAlreadyInProgress => 'Дзвінок вже йде';
+
+  @override
+  String get failedToGetCallToken => 'Не вдалося отримати токен. Спочатку підтвердіть номер.';
+
+  @override
+  String get failedToInitializeCallService => 'Не вдалося ініціалізувати службу дзвінків';
+
+  @override
+  String get speakerLabelYou => 'Ви';
+
+  @override
+  String get speakerLabelUnknown => 'Невідомий';
+
+  @override
+  String get showDailyScoreOnHomepage => 'Показати щоденний рахунок на головній сторінці';
+
+  @override
+  String get showTasksOnHomepage => 'Показати завдання на головній сторінці';
+
+  @override
+  String get phoneCallsUnlimitedOnly => 'Телефонні дзвінки через Omi';
+
+  @override
+  String get phoneCallsUpsellSubtitle =>
+      'Здійснюйте дзвінки через Omi та отримуйте транскрипцію в реальному часі, автоматичні зведення та багато іншого.';
+
+  @override
+  String get phoneCallsUpsellFeature1 => 'Транскрипція кожного дзвінка в реальному часі';
+
+  @override
+  String get phoneCallsUpsellFeature2 => 'Автоматичні зведення дзвінків та завдання';
+
+  @override
+  String get phoneCallsUpsellFeature3 => 'Одержувачі бачать ваш справжній номер, а не випадковий';
+
+  @override
+  String get phoneCallsUpsellFeature4 => 'Ваші дзвінки залишаються приватними та захищеними';
+
+  @override
+  String get phoneCallsUpgradeButton => 'Перейти на Безлімітний';
+
+  @override
+  String get phoneCallsMaybeLater => 'Можливо пізніше';
+
+  @override
+  String get deleteSynced => 'Видалити синхронізовані';
+
+  @override
+  String get deleteSyncedFiles => 'Видалити синхронізовані записи';
+
+  @override
+  String get deleteSyncedFilesMessage => 'Ці записи вже синхронізовані з вашим телефоном. Це не можна скасувати.';
+
+  @override
+  String get syncedFilesDeleted => 'Синхронізовані записи видалено';
+
+  @override
+  String get deletePending => 'Видалити очікувані';
+
+  @override
+  String get deletePendingFiles => 'Видалити очікувані записи';
+
+  @override
+  String get deletePendingFilesWarning =>
+      'Ці записи НЕ синхронізовані з вашим телефоном і будуть безповоротно втрачені. Це не можна скасувати.';
+
+  @override
+  String get pendingFilesDeleted => 'Очікувані записи видалено';
+
+  @override
+  String get deleteAllFiles => 'Видалити всі записи';
+
+  @override
+  String get deleteAll => 'Видалити все';
+
+  @override
+  String get deleteAllFilesWarning =>
+      'Це видалить синхронізовані та очікувані записи. Очікувані записи НЕ синхронізовані і будуть безповоротно втрачені.';
+
+  @override
+  String get allFilesDeleted => 'Всі записи видалено';
+
+  @override
+  String nFiles(int count) {
+    return '$count записів';
+  }
+
+  @override
+  String get manageStorage => 'Керування сховищем';
+
+  @override
+  String get safelyBackedUp => 'Безпечно збережено на вашому телефоні';
+
+  @override
+  String get notYetSynced => 'Ще не синхронізовано з вашим телефоном';
+
+  @override
+  String get clearAll => 'Очистити все';
 }

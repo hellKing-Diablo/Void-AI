@@ -24,7 +24,8 @@ class AppLocalizationsAr extends AppLocalizations {
   String get deleteConversationTitle => 'حذف المحادثة؟';
 
   @override
-  String get deleteConversationMessage => 'هل أنت متأكد من رغبتك في حذف هذه المحادثة؟ لا يمكن التراجع عن هذا الإجراء.';
+  String get deleteConversationMessage =>
+      'سيؤدي هذا أيضًا إلى حذف الذكريات والمهام وملفات الصوت المرتبطة. لا يمكن التراجع عن هذا الإجراء.';
 
   @override
   String get confirm => 'تأكيد';
@@ -1713,7 +1714,7 @@ class AppLocalizationsAr extends AppLocalizations {
   }
 
   @override
-  String get dontShowAgain => 'لا تظهر هذا مرة أخرى';
+  String get dontShowAgain => 'عدم الإظهار مجدداً';
 
   @override
   String get iUnderstand => 'أفهم';
@@ -2654,7 +2655,7 @@ class AppLocalizationsAr extends AppLocalizations {
   String get showAll => 'عرض الكل ←';
 
   @override
-  String get noTasksForToday => 'لا توجد مهام لليوم.\\nاسأل Omi عن المزيد من المهام أو أنشئها يدويًا.';
+  String get noTasksForToday => 'لا توجد مهام لليوم.\nاسأل Omi عن المزيد من المهام أو أنشئها يدويًا.';
 
   @override
   String get dailyScore => 'النتيجة اليومية';
@@ -3118,7 +3119,7 @@ class AppLocalizationsAr extends AppLocalizations {
   String get report => 'إبلاغ';
 
   @override
-  String get microphonePermissionRequired => 'مطلوب إذن الميكروفون للتسجيل الصوتي.';
+  String get microphonePermissionRequired => 'إذن الميكروفون مطلوب لإجراء المكالمات';
 
   @override
   String get microphonePermissionDenied =>
@@ -5118,7 +5119,7 @@ class AppLocalizationsAr extends AppLocalizations {
   String get analyzing => 'جاري التحليل...';
 
   @override
-  String get searchCountries => 'البحث عن البلدان...';
+  String get searchCountries => 'البحث عن البلدان';
 
   @override
   String get checkingAppleWatch => 'جاري فحص Apple Watch...';
@@ -8209,4 +8210,289 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get anyoneWithLinkCanView => 'يمكن لأي شخص لديه الرابط العرض';
+
+  @override
+  String get tasksCleanTodayTitle => 'تنظيف مهام اليوم؟';
+
+  @override
+  String get tasksCleanTodayMessage => 'سيؤدي هذا فقط إلى إزالة المواعيد النهائية';
+
+  @override
+  String get tasksOverdue => 'متأخرة';
+
+  @override
+  String get phoneCallsWithOmi => 'المكالمات الهاتفية مع Omi';
+
+  @override
+  String get phoneCallsSubtitle => 'إجراء مكالمات مع النسخ الفوري';
+
+  @override
+  String get phoneSetupStep1Title => 'تحقق من رقم هاتفك';
+
+  @override
+  String get phoneSetupStep1Subtitle => 'سنتصل بك لتأكيد أنه رقمك';
+
+  @override
+  String get phoneSetupStep2Title => 'أدخل رمز التحقق';
+
+  @override
+  String get phoneSetupStep2Subtitle => 'رمز قصير ستدخله أثناء المكالمة';
+
+  @override
+  String get phoneSetupStep3Title => 'ابدأ الاتصال بجهات اتصالك';
+
+  @override
+  String get phoneSetupStep3Subtitle => 'مع النسخ المباشر المدمج';
+
+  @override
+  String get phoneGetStarted => 'ابدأ الآن';
+
+  @override
+  String get callRecordingConsentDisclaimer => 'قد يتطلب تسجيل المكالمات موافقة في منطقتك';
+
+  @override
+  String get enterYourNumber => 'أدخل رقمك';
+
+  @override
+  String get phoneNumberCallerIdHint => 'بمجرد التحقق، سيصبح هذا هو معرف المتصل الخاص بك';
+
+  @override
+  String get phoneNumberHint => 'رقم الهاتف';
+
+  @override
+  String get failedToStartVerification => 'فشل بدء التحقق';
+
+  @override
+  String get phoneContinue => 'متابعة';
+
+  @override
+  String get verifyYourNumber => 'تحقق من رقمك';
+
+  @override
+  String get answerTheCallFrom => 'أجب على المكالمة من';
+
+  @override
+  String get onTheCallEnterThisCode => 'أثناء المكالمة، أدخل هذا الرمز';
+
+  @override
+  String get followTheVoiceInstructions => 'اتبع التعليمات الصوتية';
+
+  @override
+  String get statusCalling => 'جاري الاتصال...';
+
+  @override
+  String get statusCallInProgress => 'المكالمة جارية';
+
+  @override
+  String get statusVerifiedLabel => 'تم التحقق';
+
+  @override
+  String get statusCallMissed => 'مكالمة فائتة';
+
+  @override
+  String get statusTimedOut => 'انتهت المهلة';
+
+  @override
+  String get phoneTryAgain => 'حاول مرة أخرى';
+
+  @override
+  String get phonePageTitle => 'الهاتف';
+
+  @override
+  String get phoneContactsTab => 'جهات الاتصال';
+
+  @override
+  String get phoneKeypadTab => 'لوحة المفاتيح';
+
+  @override
+  String get grantContactsAccess => 'منح الوصول إلى جهات اتصالك';
+
+  @override
+  String get phoneAllow => 'السماح';
+
+  @override
+  String get phoneSearchHint => 'بحث';
+
+  @override
+  String get phoneNoContactsFound => 'لم يتم العثور على جهات اتصال';
+
+  @override
+  String get phoneEnterNumber => 'أدخل الرقم';
+
+  @override
+  String get failedToStartCall => 'فشل بدء المكالمة';
+
+  @override
+  String get callStateConnecting => 'جاري الاتصال...';
+
+  @override
+  String get callStateRinging => 'جاري الرنين...';
+
+  @override
+  String get callStateEnded => 'انتهت المكالمة';
+
+  @override
+  String get callStateFailed => 'فشلت المكالمة';
+
+  @override
+  String get transcriptPlaceholder => 'سيظهر النص هنا...';
+
+  @override
+  String get phoneUnmute => 'إلغاء كتم الصوت';
+
+  @override
+  String get phoneMute => 'كتم الصوت';
+
+  @override
+  String get phoneSpeaker => 'مكبر الصوت';
+
+  @override
+  String get phoneEndCall => 'إنهاء';
+
+  @override
+  String get phoneCallSettingsTitle => 'إعدادات المكالمات الهاتفية';
+
+  @override
+  String get yourVerifiedNumbers => 'أرقامك المتحقق منها';
+
+  @override
+  String get verifiedNumbersDescription => 'عند الاتصال بشخص ما، سيرى هذا الرقم على هاتفه';
+
+  @override
+  String get noVerifiedNumbers => 'لا توجد أرقام متحقق منها';
+
+  @override
+  String deletePhoneNumberConfirm(String phoneNumber) {
+    return 'حذف $phoneNumber؟';
+  }
+
+  @override
+  String get deletePhoneNumberWarning => 'ستحتاج إلى التحقق مرة أخرى لإجراء المكالمات';
+
+  @override
+  String get phoneDeleteButton => 'حذف';
+
+  @override
+  String verifiedMinutesAgo(int minutes) {
+    return 'تم التحقق منذ $minutes دقيقة';
+  }
+
+  @override
+  String verifiedHoursAgo(int hours) {
+    return 'تم التحقق منذ $hours ساعة';
+  }
+
+  @override
+  String verifiedDaysAgo(int days) {
+    return 'تم التحقق منذ $days يوم';
+  }
+
+  @override
+  String verifiedOnDate(String date) {
+    return 'تم التحقق في $date';
+  }
+
+  @override
+  String get verifiedFallback => 'تم التحقق';
+
+  @override
+  String get callAlreadyInProgress => 'هناك مكالمة جارية بالفعل';
+
+  @override
+  String get failedToGetCallToken => 'فشل الحصول على رمز المكالمة. تحقق من رقم هاتفك أولاً.';
+
+  @override
+  String get failedToInitializeCallService => 'فشل تهيئة خدمة المكالمات';
+
+  @override
+  String get speakerLabelYou => 'أنت';
+
+  @override
+  String get speakerLabelUnknown => 'غير معروف';
+
+  @override
+  String get showDailyScoreOnHomepage => 'عرض النتيجة اليومية على الصفحة الرئيسية';
+
+  @override
+  String get showTasksOnHomepage => 'عرض المهام على الصفحة الرئيسية';
+
+  @override
+  String get phoneCallsUnlimitedOnly => 'مكالمات هاتفية عبر Omi';
+
+  @override
+  String get phoneCallsUpsellSubtitle =>
+      'قم بإجراء مكالمات عبر Omi واحصل على نسخ نصي فوري وملخصات تلقائية والمزيد. متاح حصرياً لمشتركي خطة غير محدود.';
+
+  @override
+  String get phoneCallsUpsellFeature1 => 'نسخ نصي فوري لكل مكالمة';
+
+  @override
+  String get phoneCallsUpsellFeature2 => 'ملخصات تلقائية للمكالمات وعناصر العمل';
+
+  @override
+  String get phoneCallsUpsellFeature3 => 'يرى المتلقون رقمك الحقيقي، وليس رقماً عشوائياً';
+
+  @override
+  String get phoneCallsUpsellFeature4 => 'مكالماتك تبقى خاصة وآمنة';
+
+  @override
+  String get phoneCallsUpgradeButton => 'ترقية إلى غير محدود';
+
+  @override
+  String get phoneCallsMaybeLater => 'ربما لاحقاً';
+
+  @override
+  String get deleteSynced => 'حذف المتزامن';
+
+  @override
+  String get deleteSyncedFiles => 'حذف التسجيلات المتزامنة';
+
+  @override
+  String get deleteSyncedFilesMessage => 'تم مزامنة هذه التسجيلات مع هاتفك بالفعل. لا يمكن التراجع عن هذا.';
+
+  @override
+  String get syncedFilesDeleted => 'تم حذف التسجيلات المتزامنة';
+
+  @override
+  String get deletePending => 'حذف المعلق';
+
+  @override
+  String get deletePendingFiles => 'حذف التسجيلات المعلقة';
+
+  @override
+  String get deletePendingFilesWarning =>
+      'لم تتم مزامنة هذه التسجيلات مع هاتفك وستفقد نهائياً. لا يمكن التراجع عن هذا.';
+
+  @override
+  String get pendingFilesDeleted => 'تم حذف التسجيلات المعلقة';
+
+  @override
+  String get deleteAllFiles => 'حذف جميع التسجيلات';
+
+  @override
+  String get deleteAll => 'حذف الكل';
+
+  @override
+  String get deleteAllFilesWarning =>
+      'سيؤدي هذا إلى حذف التسجيلات المتزامنة والمعلقة. التسجيلات المعلقة لم تتم مزامنتها وستفقد نهائياً. لا يمكن التراجع عن هذا.';
+
+  @override
+  String get allFilesDeleted => 'تم حذف جميع التسجيلات';
+
+  @override
+  String nFiles(int count) {
+    return '$count تسجيل';
+  }
+
+  @override
+  String get manageStorage => 'إدارة التخزين';
+
+  @override
+  String get safelyBackedUp => 'تم النسخ الاحتياطي بأمان إلى هاتفك';
+
+  @override
+  String get notYetSynced => 'لم تتم المزامنة بعد مع هاتفك';
+
+  @override
+  String get clearAll => 'مسح الكل';
 }

@@ -25,7 +25,7 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get deleteConversationMessage =>
-      'क्या आप वाकई इस बातचीत को हटाना चाहते हैं? यह क्रिया पूर्ववत नहीं की जा सकती।';
+      'इससे संबंधित यादें, कार्य और ऑडियो फ़ाइलें भी हटा दी जाएंगी। यह क्रिया पूर्ववत नहीं की जा सकती।';
 
   @override
   String get confirm => 'पुष्टि करें';
@@ -1714,7 +1714,7 @@ class AppLocalizationsHi extends AppLocalizations {
   }
 
   @override
-  String get dontShowAgain => 'फिर से न दिखाएं';
+  String get dontShowAgain => 'दोबारा न दिखाएं';
 
   @override
   String get iUnderstand => 'मैं समझता हूं';
@@ -2646,8 +2646,7 @@ class AppLocalizationsHi extends AppLocalizations {
   String get showAll => 'सभी दिखाएं →';
 
   @override
-  String get noTasksForToday =>
-      'आज के लिए कोई कार्य नहीं।\\nअधिक कार्यों के लिए Omi से पूछें या मैन्युअल रूप से बनाएं।';
+  String get noTasksForToday => 'आज के लिए कोई कार्य नहीं।\nअधिक कार्यों के लिए Omi से पूछें या मैन्युअल रूप से बनाएं।';
 
   @override
   String get dailyScore => 'दैनिक स्कोर';
@@ -8248,4 +8247,290 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get anyoneWithLinkCanView => 'लिंक वाला कोई भी व्यक्ति देख सकता है';
+
+  @override
+  String get tasksCleanTodayTitle => 'आज के कार्य साफ़ करें?';
+
+  @override
+  String get tasksCleanTodayMessage => 'यह केवल समय-सीमाएँ हटाएगा';
+
+  @override
+  String get tasksOverdue => 'अतिदेय';
+
+  @override
+  String get phoneCallsWithOmi => 'Omi के साथ कॉल';
+
+  @override
+  String get phoneCallsSubtitle => 'रीयल-टाइम ट्रांसक्रिप्शन के साथ कॉल करें';
+
+  @override
+  String get phoneSetupStep1Title => 'अपना फ़ोन नंबर सत्यापित करें';
+
+  @override
+  String get phoneSetupStep1Subtitle => 'हम पुष्टि के लिए आपको कॉल करेंगे';
+
+  @override
+  String get phoneSetupStep2Title => 'सत्यापन कोड दर्ज करें';
+
+  @override
+  String get phoneSetupStep2Subtitle => 'एक छोटा कोड जो आप कॉल पर टाइप करेंगे';
+
+  @override
+  String get phoneSetupStep3Title => 'अपने संपर्कों को कॉल करना शुरू करें';
+
+  @override
+  String get phoneSetupStep3Subtitle => 'बिल्ट-इन लाइव ट्रांसक्रिप्शन के साथ';
+
+  @override
+  String get phoneGetStarted => 'शुरू करें';
+
+  @override
+  String get callRecordingConsentDisclaimer => 'कॉल रिकॉर्डिंग के लिए आपके क्षेत्र में सहमति आवश्यक हो सकती है';
+
+  @override
+  String get enterYourNumber => 'अपना नंबर दर्ज करें';
+
+  @override
+  String get phoneNumberCallerIdHint => 'सत्यापन के बाद यह आपकी कॉलर आईडी बन जाएगी';
+
+  @override
+  String get phoneNumberHint => 'फ़ोन नंबर';
+
+  @override
+  String get failedToStartVerification => 'सत्यापन शुरू करने में विफल';
+
+  @override
+  String get phoneContinue => 'जारी रखें';
+
+  @override
+  String get verifyYourNumber => 'अपना नंबर सत्यापित करें';
+
+  @override
+  String get answerTheCallFrom => 'इस नंबर से आने वाली कॉल का जवाब दें';
+
+  @override
+  String get onTheCallEnterThisCode => 'कॉल पर यह कोड दर्ज करें';
+
+  @override
+  String get followTheVoiceInstructions => 'वॉइस निर्देशों का पालन करें';
+
+  @override
+  String get statusCalling => 'कॉल हो रहा है...';
+
+  @override
+  String get statusCallInProgress => 'कॉल चल रही है';
+
+  @override
+  String get statusVerifiedLabel => 'सत्यापित';
+
+  @override
+  String get statusCallMissed => 'मिस्ड कॉल';
+
+  @override
+  String get statusTimedOut => 'समय समाप्त';
+
+  @override
+  String get phoneTryAgain => 'पुनः प्रयास करें';
+
+  @override
+  String get phonePageTitle => 'फ़ोन';
+
+  @override
+  String get phoneContactsTab => 'संपर्क';
+
+  @override
+  String get phoneKeypadTab => 'कीपैड';
+
+  @override
+  String get grantContactsAccess => 'अपने संपर्कों तक पहुंच दें';
+
+  @override
+  String get phoneAllow => 'अनुमति दें';
+
+  @override
+  String get phoneSearchHint => 'खोजें';
+
+  @override
+  String get phoneNoContactsFound => 'कोई संपर्क नहीं मिला';
+
+  @override
+  String get phoneEnterNumber => 'नंबर दर्ज करें';
+
+  @override
+  String get failedToStartCall => 'कॉल शुरू करने में विफल';
+
+  @override
+  String get callStateConnecting => 'कनेक्ट हो रहा है...';
+
+  @override
+  String get callStateRinging => 'रिंग हो रहा है...';
+
+  @override
+  String get callStateEnded => 'कॉल समाप्त';
+
+  @override
+  String get callStateFailed => 'कॉल विफल';
+
+  @override
+  String get transcriptPlaceholder => 'ट्रांसक्रिप्ट यहां दिखाई देगा...';
+
+  @override
+  String get phoneUnmute => 'अनम्यूट';
+
+  @override
+  String get phoneMute => 'म्यूट';
+
+  @override
+  String get phoneSpeaker => 'स्पीकर';
+
+  @override
+  String get phoneEndCall => 'समाप्त';
+
+  @override
+  String get phoneCallSettingsTitle => 'कॉल सेटिंग्स';
+
+  @override
+  String get yourVerifiedNumbers => 'आपके सत्यापित नंबर';
+
+  @override
+  String get verifiedNumbersDescription => 'जब आप किसी को कॉल करेंगे, उन्हें यह नंबर दिखेगा';
+
+  @override
+  String get noVerifiedNumbers => 'कोई सत्यापित नंबर नहीं';
+
+  @override
+  String deletePhoneNumberConfirm(String phoneNumber) {
+    return '$phoneNumber हटाएं?';
+  }
+
+  @override
+  String get deletePhoneNumberWarning => 'कॉल करने के लिए आपको फिर से सत्यापित करना होगा';
+
+  @override
+  String get phoneDeleteButton => 'हटाएं';
+
+  @override
+  String verifiedMinutesAgo(int minutes) {
+    return '$minutesमि पहले सत्यापित';
+  }
+
+  @override
+  String verifiedHoursAgo(int hours) {
+    return '$hoursघं पहले सत्यापित';
+  }
+
+  @override
+  String verifiedDaysAgo(int days) {
+    return '$daysदिन पहले सत्यापित';
+  }
+
+  @override
+  String verifiedOnDate(String date) {
+    return '$date को सत्यापित';
+  }
+
+  @override
+  String get verifiedFallback => 'सत्यापित';
+
+  @override
+  String get callAlreadyInProgress => 'एक कॉल पहले से चल रही है';
+
+  @override
+  String get failedToGetCallToken => 'टोकन प्राप्त करने में विफल। पहले अपना नंबर सत्यापित करें।';
+
+  @override
+  String get failedToInitializeCallService => 'कॉल सेवा आरंभ करने में विफल';
+
+  @override
+  String get speakerLabelYou => 'आप';
+
+  @override
+  String get speakerLabelUnknown => 'अज्ञात';
+
+  @override
+  String get showDailyScoreOnHomepage => 'होमपेज पर दैनिक स्कोर दिखाएं';
+
+  @override
+  String get showTasksOnHomepage => 'होमपेज पर कार्य दिखाएं';
+
+  @override
+  String get phoneCallsUnlimitedOnly => 'Omi से फ़ोन कॉल';
+
+  @override
+  String get phoneCallsUpsellSubtitle =>
+      'Omi से कॉल करें और रियल-टाइम ट्रांसक्रिप्शन, स्वचालित सारांश और बहुत कुछ पाएं।';
+
+  @override
+  String get phoneCallsUpsellFeature1 => 'हर कॉल की रियल-टाइम ट्रांसक्रिप्शन';
+
+  @override
+  String get phoneCallsUpsellFeature2 => 'स्वचालित कॉल सारांश और कार्य सूची';
+
+  @override
+  String get phoneCallsUpsellFeature3 => 'प्राप्तकर्ता आपका असली नंबर देखते हैं, कोई रैंडम नंबर नहीं';
+
+  @override
+  String get phoneCallsUpsellFeature4 => 'आपकी कॉल निजी और सुरक्षित रहती हैं';
+
+  @override
+  String get phoneCallsUpgradeButton => 'अनलिमिटेड में अपग्रेड करें';
+
+  @override
+  String get phoneCallsMaybeLater => 'शायद बाद में';
+
+  @override
+  String get deleteSynced => 'सिंक किए गए हटाएं';
+
+  @override
+  String get deleteSyncedFiles => 'सिंक की गई रिकॉर्डिंग हटाएं';
+
+  @override
+  String get deleteSyncedFilesMessage =>
+      'ये रिकॉर्डिंग पहले से आपके फोन पर सिंक हो चुकी हैं। यह पूर्ववत नहीं किया जा सकता।';
+
+  @override
+  String get syncedFilesDeleted => 'सिंक की गई रिकॉर्डिंग हटाई गईं';
+
+  @override
+  String get deletePending => 'लंबित हटाएं';
+
+  @override
+  String get deletePendingFiles => 'लंबित रिकॉर्डिंग हटाएं';
+
+  @override
+  String get deletePendingFilesWarning =>
+      'ये रिकॉर्डिंग आपके फोन पर सिंक नहीं हुई हैं और स्थायी रूप से खो जाएंगी। यह पूर्ववत नहीं किया जा सकता।';
+
+  @override
+  String get pendingFilesDeleted => 'लंबित रिकॉर्डिंग हटाई गईं';
+
+  @override
+  String get deleteAllFiles => 'सभी रिकॉर्डिंग हटाएं';
+
+  @override
+  String get deleteAll => 'सब हटाएं';
+
+  @override
+  String get deleteAllFilesWarning =>
+      'यह सिंक की गई और लंबित दोनों रिकॉर्डिंग हटा देगा। लंबित रिकॉर्डिंग सिंक नहीं हुई हैं और स्थायी रूप से खो जाएंगी।';
+
+  @override
+  String get allFilesDeleted => 'सभी रिकॉर्डिंग हटाई गईं';
+
+  @override
+  String nFiles(int count) {
+    return '$count रिकॉर्डिंग';
+  }
+
+  @override
+  String get manageStorage => 'स्टोरेज प्रबंधित करें';
+
+  @override
+  String get safelyBackedUp => 'आपके फोन पर सुरक्षित बैकअप';
+
+  @override
+  String get notYetSynced => 'अभी तक आपके फोन पर सिंक नहीं हुआ';
+
+  @override
+  String get clearAll => 'सब हटाएं';
 }

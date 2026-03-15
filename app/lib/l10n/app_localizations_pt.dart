@@ -25,7 +25,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get deleteConversationMessage =>
-      'Tem certeza de que deseja apagar esta conversa? Esta ação não pode ser desfeita.';
+      'Isso também excluirá as memórias, tarefas e arquivos de áudio associados. Esta ação não pode ser desfeita.';
 
   @override
   String get confirm => 'Confirmar';
@@ -2648,7 +2648,7 @@ class AppLocalizationsPt extends AppLocalizations {
   String get showAll => 'Mostrar tudo →';
 
   @override
-  String get noTasksForToday => 'Nenhuma tarefa para hoje.\\nPergunte ao Omi por mais tarefas ou crie manualmente.';
+  String get noTasksForToday => 'Nenhuma tarefa para hoje.\nPergunte ao Omi por mais tarefas ou crie manualmente.';
 
   @override
   String get dailyScore => 'PONTUAÇÃO DIÁRIA';
@@ -8270,4 +8270,290 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get anyoneWithLinkCanView => 'Qualquer pessoa com o link pode visualizar';
+
+  @override
+  String get tasksCleanTodayTitle => 'Limpar as tarefas de hoje?';
+
+  @override
+  String get tasksCleanTodayMessage => 'Isto removerá apenas os prazos';
+
+  @override
+  String get tasksOverdue => 'Atrasadas';
+
+  @override
+  String get phoneCallsWithOmi => 'Chamadas com Omi';
+
+  @override
+  String get phoneCallsSubtitle => 'Faca chamadas com transcricao em tempo real';
+
+  @override
+  String get phoneSetupStep1Title => 'Verifique seu numero de telefone';
+
+  @override
+  String get phoneSetupStep1Subtitle => 'Ligaremos para confirmar';
+
+  @override
+  String get phoneSetupStep2Title => 'Digite um codigo de verificacao';
+
+  @override
+  String get phoneSetupStep2Subtitle => 'Um codigo curto que voce digitara na chamada';
+
+  @override
+  String get phoneSetupStep3Title => 'Comece a ligar para seus contatos';
+
+  @override
+  String get phoneSetupStep3Subtitle => 'Com transcricao ao vivo integrada';
+
+  @override
+  String get phoneGetStarted => 'Comecar';
+
+  @override
+  String get callRecordingConsentDisclaimer => 'A gravacao de chamadas pode exigir consentimento na sua jurisdicao';
+
+  @override
+  String get enterYourNumber => 'Digite seu numero';
+
+  @override
+  String get phoneNumberCallerIdHint => 'Apos verificacao, este sera seu ID de chamada';
+
+  @override
+  String get phoneNumberHint => 'Numero de telefone';
+
+  @override
+  String get failedToStartVerification => 'Falha ao iniciar verificacao';
+
+  @override
+  String get phoneContinue => 'Continuar';
+
+  @override
+  String get verifyYourNumber => 'Verifique seu numero';
+
+  @override
+  String get answerTheCallFrom => 'Atenda a chamada de';
+
+  @override
+  String get onTheCallEnterThisCode => 'Durante a chamada, digite este codigo';
+
+  @override
+  String get followTheVoiceInstructions => 'Siga as instrucoes de voz';
+
+  @override
+  String get statusCalling => 'Chamando...';
+
+  @override
+  String get statusCallInProgress => 'Chamada em andamento';
+
+  @override
+  String get statusVerifiedLabel => 'Verificado';
+
+  @override
+  String get statusCallMissed => 'Chamada perdida';
+
+  @override
+  String get statusTimedOut => 'Tempo esgotado';
+
+  @override
+  String get phoneTryAgain => 'Tentar novamente';
+
+  @override
+  String get phonePageTitle => 'Telefone';
+
+  @override
+  String get phoneContactsTab => 'Contatos';
+
+  @override
+  String get phoneKeypadTab => 'Teclado';
+
+  @override
+  String get grantContactsAccess => 'Conceda acesso aos seus contatos';
+
+  @override
+  String get phoneAllow => 'Permitir';
+
+  @override
+  String get phoneSearchHint => 'Pesquisar';
+
+  @override
+  String get phoneNoContactsFound => 'Nenhum contato encontrado';
+
+  @override
+  String get phoneEnterNumber => 'Digite o numero';
+
+  @override
+  String get failedToStartCall => 'Falha ao iniciar chamada';
+
+  @override
+  String get callStateConnecting => 'Conectando...';
+
+  @override
+  String get callStateRinging => 'Tocando...';
+
+  @override
+  String get callStateEnded => 'Chamada encerrada';
+
+  @override
+  String get callStateFailed => 'Chamada falhou';
+
+  @override
+  String get transcriptPlaceholder => 'A transcricao aparecera aqui...';
+
+  @override
+  String get phoneUnmute => 'Ativar som';
+
+  @override
+  String get phoneMute => 'Mudo';
+
+  @override
+  String get phoneSpeaker => 'Alto-falante';
+
+  @override
+  String get phoneEndCall => 'Encerrar';
+
+  @override
+  String get phoneCallSettingsTitle => 'Configuracoes de chamada';
+
+  @override
+  String get yourVerifiedNumbers => 'Seus numeros verificados';
+
+  @override
+  String get verifiedNumbersDescription => 'Quando voce ligar para alguem, verao este numero';
+
+  @override
+  String get noVerifiedNumbers => 'Nenhum numero verificado';
+
+  @override
+  String deletePhoneNumberConfirm(String phoneNumber) {
+    return 'Excluir $phoneNumber?';
+  }
+
+  @override
+  String get deletePhoneNumberWarning => 'Voce precisara verificar novamente para fazer chamadas';
+
+  @override
+  String get phoneDeleteButton => 'Excluir';
+
+  @override
+  String verifiedMinutesAgo(int minutes) {
+    return 'Verificado ha ${minutes}min';
+  }
+
+  @override
+  String verifiedHoursAgo(int hours) {
+    return 'Verificado ha ${hours}h';
+  }
+
+  @override
+  String verifiedDaysAgo(int days) {
+    return 'Verificado ha ${days}d';
+  }
+
+  @override
+  String verifiedOnDate(String date) {
+    return 'Verificado em $date';
+  }
+
+  @override
+  String get verifiedFallback => 'Verificado';
+
+  @override
+  String get callAlreadyInProgress => 'Uma chamada ja esta em andamento';
+
+  @override
+  String get failedToGetCallToken => 'Falha ao obter token. Verifique seu numero primeiro.';
+
+  @override
+  String get failedToInitializeCallService => 'Falha ao inicializar servico de chamadas';
+
+  @override
+  String get speakerLabelYou => 'Voce';
+
+  @override
+  String get speakerLabelUnknown => 'Desconhecido';
+
+  @override
+  String get showDailyScoreOnHomepage => 'Mostrar pontuação diária na página inicial';
+
+  @override
+  String get showTasksOnHomepage => 'Mostrar tarefas na página inicial';
+
+  @override
+  String get phoneCallsUnlimitedOnly => 'Chamadas telefónicas via Omi';
+
+  @override
+  String get phoneCallsUpsellSubtitle =>
+      'Faça chamadas pelo Omi e obtenha transcrição em tempo real, resumos automáticos e muito mais.';
+
+  @override
+  String get phoneCallsUpsellFeature1 => 'Transcrição em tempo real de cada chamada';
+
+  @override
+  String get phoneCallsUpsellFeature2 => 'Resumos automáticos de chamadas e tarefas';
+
+  @override
+  String get phoneCallsUpsellFeature3 => 'Os destinatários veem o seu número real, não um aleatório';
+
+  @override
+  String get phoneCallsUpsellFeature4 => 'As suas chamadas permanecem privadas e seguras';
+
+  @override
+  String get phoneCallsUpgradeButton => 'Atualizar para Ilimitado';
+
+  @override
+  String get phoneCallsMaybeLater => 'Talvez mais tarde';
+
+  @override
+  String get deleteSynced => 'Eliminar sincronizados';
+
+  @override
+  String get deleteSyncedFiles => 'Excluir gravações sincronizadas';
+
+  @override
+  String get deleteSyncedFilesMessage =>
+      'Estas gravações já foram sincronizadas com seu telefone. Isso não pode ser desfeito.';
+
+  @override
+  String get syncedFilesDeleted => 'Gravações sincronizadas excluídas';
+
+  @override
+  String get deletePending => 'Eliminar pendentes';
+
+  @override
+  String get deletePendingFiles => 'Excluir gravações pendentes';
+
+  @override
+  String get deletePendingFilesWarning =>
+      'Estas gravações NÃO foram sincronizadas com seu telefone e serão permanentemente perdidas. Isso não pode ser desfeito.';
+
+  @override
+  String get pendingFilesDeleted => 'Gravações pendentes excluídas';
+
+  @override
+  String get deleteAllFiles => 'Excluir todas as gravações';
+
+  @override
+  String get deleteAll => 'Eliminar tudo';
+
+  @override
+  String get deleteAllFilesWarning =>
+      'Isso excluirá gravações sincronizadas e pendentes. Gravações pendentes NÃO foram sincronizadas e serão permanentemente perdidas.';
+
+  @override
+  String get allFilesDeleted => 'Todas as gravações excluídas';
+
+  @override
+  String nFiles(int count) {
+    return '$count gravações';
+  }
+
+  @override
+  String get manageStorage => 'Gerenciar armazenamento';
+
+  @override
+  String get safelyBackedUp => 'Backup seguro no seu telefone';
+
+  @override
+  String get notYetSynced => 'Ainda não sincronizado com seu telefone';
+
+  @override
+  String get clearAll => 'Limpar tudo';
 }
