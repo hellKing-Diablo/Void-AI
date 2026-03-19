@@ -26,6 +26,8 @@ import 'package:omi/services/devices/transports/ble_transport.dart';
 import 'package:omi/services/devices/transports/frame_transport.dart';
 import 'package:omi/services/devices/transports/watch_transport.dart';
 import 'package:omi/utils/logger.dart';
+//IMporting void ai dart file
+import 'package:omi/services/devices/void_connection.dart';
 
 class DeviceConnectionFactory {
   static DeviceConnection? create(BtDevice device) {
@@ -88,6 +90,9 @@ class DeviceConnectionFactory {
         return FriendPendantDeviceConnection(device, transport);
       case DeviceType.limitless:
         return LimitlessDeviceConnection(device, transport);
+      //Added Void AI Case
+      case DeviceType.voidDevice:
+        return VoidConnection(device, transport);
     }
   }
 }

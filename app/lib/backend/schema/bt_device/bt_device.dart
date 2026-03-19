@@ -198,7 +198,13 @@ Future<DeviceType?> getTypeOfBluetoothDevice(BluetoothDevice device) async {
   // Check for device types using helper methods
   if (BtDevice.isBeeDeviceFromDevice(device)) {
     deviceType = DeviceType.bee;
-  } else if (BtDevice.isPlaudDeviceFromDevice(device)) {
+  }
+  //Added Void Device third part breadboard proto
+    else if (BtDevice.isVoidDeviceFromDevice(device)) {
+    deviceType = DeviceType.voidDevice;
+    } // tille here
+  
+   else if (BtDevice.isPlaudDeviceFromDevice(device)) {
     deviceType = DeviceType.plaud;
   } else if (BtDevice.isFieldyDeviceFromDevice(device)) {
     deviceType = DeviceType.fieldy;
@@ -235,6 +241,7 @@ enum DeviceType {
   fieldy,
   friendPendant,
   limitless,
+  voidDevice, // 🚀 ADD THIS
 }
 
 Map<String, DeviceType> cachedDevicesMap = {};
@@ -623,6 +630,7 @@ class BtDevice {
       case DeviceType.omi:
       case DeviceType.openglass:
       case DeviceType.frame:
+      case DeviceType.voidDevice: // 🚀 ADDED THIS
       case DeviceType.appleWatch:
         return ''; // No warning needed
     }
@@ -654,6 +662,7 @@ class BtDevice {
             'We recommend keeping your current firmware and not updating through the Limitless app, as newer versions may affect compatibility.';
 
       case DeviceType.omi:
+      case DeviceType.voidDevice: // 🚀 ADDED THIS
       case DeviceType.openglass:
       case DeviceType.frame:
       case DeviceType.appleWatch:
@@ -777,6 +786,18 @@ class BtDevice {
     return device.servicesList.any((s) => s.uuid == Guid(omiServiceUuid));
   }
 
+  //Added Void-AI device
+
+  static bool isVoidDevice(ScanResult result) {
+    return result.device.platformName.toLowerCase().contains('void ai');
+  }
+
+  static bool isVoidDeviceFromDevice(BluetoothDevice device) {
+    return device.platformName.toLowerCase().contains('void ai');
+  }
+
+  //TIll here
+
   static bool isFrameDevice(ScanResult result) {
     return result.advertisementData.serviceUuids.contains(Guid(frameServiceUuid));
   }
@@ -801,7 +822,12 @@ class BtDevice {
       deviceType = DeviceType.limitless;
     } else if (isOmiDevice(result)) {
       deviceType = DeviceType.omi;
-    } else if (isFrameDevice(result)) {
+    } 
+    //Added Void Device third part breadboard proto
+    else if (isVoidDevice(result)) {
+    deviceType = DeviceType.voidDevice;
+  } // tille here
+    else if (isFrameDevice(result)) {
       deviceType = DeviceType.frame;
     }
     if (deviceType != null) {

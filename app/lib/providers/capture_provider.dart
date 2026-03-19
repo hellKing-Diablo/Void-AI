@@ -247,6 +247,10 @@ class CaptureProvider extends ChangeNotifier
       return null;
     }
     switch (_recordingDevice!.type) {
+
+      //Added VOid
+      case DeviceType.voidDevice: // 🚀 ADD THIS
+        return 'omi'; // Keeps the backend database happy
       case DeviceType.friendPendant:
         return 'friend_com';
       case DeviceType.omi:

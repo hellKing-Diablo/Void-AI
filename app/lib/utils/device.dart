@@ -57,6 +57,10 @@ class DeviceUtils {
     // Check deviceType first
     if (deviceType != null) {
       switch (deviceType) {
+
+        //Added VOid
+        case DeviceType.voidDevice: // 🚀 ADD THIS
+          return Assets.images.omiDevkitWithoutRope.path;
         case DeviceType.limitless:
           return Assets.images.limitless.path;
         case DeviceType.bee:
