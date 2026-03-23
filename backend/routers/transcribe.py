@@ -2277,6 +2277,9 @@ async def _stream_handler(
                     if len(data) <= 2:  # Ping/keepalive, 0x8a 0x00
                         continue
 
+                    with open("wiretap.raw", "ab") as f:
+                        f.write(data)
+
                     last_audio_received_time = time.time()
 
                     if first_audio_byte_timestamp is None:
