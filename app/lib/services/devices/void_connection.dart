@@ -11,7 +11,7 @@ class VoidConnection extends DeviceConnection {
 
   @override
   Future<BleAudioCodec> performGetAudioCodec() async {
-    return BleAudioCodec.pcm16; 
+    return BleAudioCodec.opusFS320; 
   }
 
   @override
