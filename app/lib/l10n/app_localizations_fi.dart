@@ -8157,6 +8157,14 @@ class AppLocalizationsFi extends AppLocalizations {
   }
 
   @override
+  String get processingOnServer => 'Käsitellään palvelimella...';
+
+  @override
+  String processingOnServerProgress(int current, int total) {
+    return 'Käsitellään... $current/$total segmenttiä';
+  }
+
+  @override
   String get processedStatus => 'Käsitelty';
 
   @override
@@ -8552,4 +8560,427 @@ class AppLocalizationsFi extends AppLocalizations {
 
   @override
   String get clearAll => 'Tyhjennä kaikki';
+
+  @override
+  String get phoneKeypad => 'Näppäimistö';
+
+  @override
+  String get phoneHideKeypad => 'Piilota näppäimistö';
+
+  @override
+  String get fairUsePolicy => 'Kohtuullinen käyttö';
+
+  @override
+  String get fairUseLoadError => 'Kohtuullisen käytön tilaa ei voitu ladata. Yritä uudelleen.';
+
+  @override
+  String get fairUseStatusNormal => 'Käyttösi on normaalien rajojen sisällä.';
+
+  @override
+  String get fairUseStageNormal => 'Normaali';
+
+  @override
+  String get fairUseStageWarning => 'Varoitus';
+
+  @override
+  String get fairUseStageThrottle => 'Rajoitettu';
+
+  @override
+  String get fairUseStageRestrict => 'Estetty';
+
+  @override
+  String get fairUseSpeechUsage => 'Puheen käyttö';
+
+  @override
+  String get fairUseToday => 'Tänään';
+
+  @override
+  String get fairUse3Day => '3 päivän jakso';
+
+  @override
+  String get fairUseWeekly => 'Viikkojakso';
+
+  @override
+  String get fairUseAboutTitle => 'Tietoa kohtuullisesta käytöstä';
+
+  @override
+  String get fairUseAboutBody =>
+      'Omi on suunniteltu henkilökohtaisiin keskusteluihin, kokouksiin ja reaaliaikaiseen vuorovaikutukseen. Käyttöä mitataan havaitun todellisen puheajan, ei yhteysajan perusteella. Jos käyttö ylittää merkittävästi normaalit mallit ei-henkilökohtaisen sisällön osalta, säätöjä voidaan soveltaa.';
+
+  @override
+  String fairUseCaseRefCopied(String caseRef) {
+    return '$caseRef kopioitu';
+  }
+
+  @override
+  String get fairUseDailyTranscription => 'Daily Transcription';
+
+  @override
+  String fairUseBudgetUsed(String used, String limit) {
+    return '${used}m / ${limit}m';
+  }
+
+  @override
+  String get fairUseBudgetExhausted => 'Daily transcription limit reached';
+
+  @override
+  String fairUseBudgetResetsAt(String time) {
+    return 'Resets $time';
+  }
+
+  @override
+  String get transcriptionPaused => 'Nauhoittaa, yhdistetään uudelleen';
+
+  @override
+  String get transcriptionPausedReconnecting => 'Nauhoittaa yhä — yhdistetään uudelleen puheentunnistukseen...';
+
+  @override
+  String fairUseBannerStatus(String status) {
+    return 'Reilu käyttö: $status';
+  }
+
+  @override
+  String get improveConnectionTitle => 'Paranna yhteyttä';
+
+  @override
+  String get improveConnectionContent =>
+      'Olemme parantaneet Omin yhteydenpitoa laitteeseesi. Aktivoidaksesi tämän, siirry Laitteen tiedot -sivulle, napauta \"Katkaise laitteen yhteys\" ja yhdistä laitteesi uudelleen.';
+
+  @override
+  String get improveConnectionAction => 'Selvä';
+
+  @override
+  String clockSkewWarning(int minutes) {
+    return 'Laitteesi kello on ~$minutes min. väärässä. Tarkista päivämäärä- ja aika-asetukset.';
+  }
+
+  @override
+  String get omisStorage => 'Omin tallennustila';
+
+  @override
+  String get phoneStorage => 'Puhelimen tallennustila';
+
+  @override
+  String get cloudStorage => 'Pilvitallennustila';
+
+  @override
+  String get howSyncingWorks => 'Miten synkronointi toimii';
+
+  @override
+  String get noSyncedRecordings => 'Ei synkronoituja nauhoituksia vielä';
+
+  @override
+  String get recordingsSyncAutomatically => 'Nauhoitukset synkronoidaan automaattisesti — toimenpiteitä ei tarvita.';
+
+  @override
+  String get filesDownloadedUploadedNextTime => 'Jo ladatut tiedostot ladataan palvelimelle seuraavalla kerralla.';
+
+  @override
+  String nConversationsCreated(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count keskustelua luotu',
+      one: '1 keskustelu luotu',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get tapToView => 'Napauta nähdäksesi';
+
+  @override
+  String get syncFailed => 'Synkronointi epäonnistui';
+
+  @override
+  String get keepSyncing => 'Jatka synkronointia';
+
+  @override
+  String get cancelSyncQuestion => 'Peruuta synkronointi?';
+
+  @override
+  String get omisStorageDesc =>
+      'Kun Omi ei ole yhdistetty puhelimeesi, se tallentaa äänen paikallisesti sisäiseen muistiinsa. Et koskaan menetä nauhoitusta.';
+
+  @override
+  String get phoneStorageDesc =>
+      'Kun Omi yhdistyy uudelleen, nauhoitukset siirretään automaattisesti puhelimeesi ennen palvelimelle lataamista.';
+
+  @override
+  String get cloudStorageDesc =>
+      'Lataamisen jälkeen nauhoituksesi käsitellään ja litteroidaan. Keskustelut ovat saatavilla minuutin kuluessa.';
+
+  @override
+  String get tipKeepPhoneNearby => 'Pidä puhelin lähellä nopeampaa synkronointia varten';
+
+  @override
+  String get tipStableInternet => 'Vakaa internet nopeuttaa pilveen lataamista';
+
+  @override
+  String get tipAutoSync => 'Nauhoitukset synkronoidaan automaattisesti';
+
+  @override
+  String get storageSection => 'TALLENNUSTILA';
+
+  @override
+  String get permissions => 'Käyttöoikeudet';
+
+  @override
+  String get permissionEnabled => 'Käytössä';
+
+  @override
+  String get permissionEnable => 'Ota käyttöön';
+
+  @override
+  String get permissionsPageDescription =>
+      'Nämä käyttöoikeudet ovat keskeisiä Omin toiminnalle. Ne mahdollistavat keskeiset ominaisuudet kuten ilmoitukset, sijaintiin perustuvat kokemukset ja äänen tallennuksen.';
+
+  @override
+  String get permissionsRequiredDescription =>
+      'Omi tarvitsee muutamia käyttöoikeuksia toimiakseen oikein. Myönnä ne jatkaaksesi.';
+
+  @override
+  String get permissionsSetupTitle => 'Saat parhaan kokemuksen';
+
+  @override
+  String get permissionsSetupDescription => 'Ota käyttöön muutama lupa, jotta Omi voi tehdä taikojaan.';
+
+  @override
+  String get permissionsChangeAnytime => 'Voit muuttaa näitä milloin tahansa kohdassa Asetukset > Käyttöoikeudet';
+
+  @override
+  String get location => 'Sijainti';
+
+  @override
+  String get microphone => 'Mikrofoni';
+
+  @override
+  String get whyAreYouCanceling => 'Miksi peruutat?';
+
+  @override
+  String get cancelReasonSubtitle => 'Voitko kertoa meille, miksi lähdet?';
+
+  @override
+  String get cancelReasonTooExpensive => 'Liian kallis';
+
+  @override
+  String get cancelReasonNotUsing => 'En käytä tarpeeksi';
+
+  @override
+  String get cancelReasonMissingFeatures => 'Puuttuvat ominaisuudet';
+
+  @override
+  String get cancelReasonAudioQuality => 'Äänen/transkription laatu';
+
+  @override
+  String get cancelReasonBatteryDrain => 'Huoli akun kulumisesta';
+
+  @override
+  String get cancelReasonFoundAlternative => 'Löysin vaihtoehdon';
+
+  @override
+  String get cancelReasonOther => 'Muu';
+
+  @override
+  String get tellUsMore => 'Kerro meille lisää (valinnainen)';
+
+  @override
+  String get cancelReasonDetailHint => 'Arvostamme kaikkea palautetta...';
+
+  @override
+  String get justAMoment => 'Hetkinen';
+
+  @override
+  String get cancelConsequencesSubtitle =>
+      'Suosittelemme vahvasti tutustumaan muihin vaihtoehtoihisi peruutuksen sijaan.';
+
+  @override
+  String cancelBillingPeriodInfo(String date) {
+    return 'Tilauksesi pysyy aktiivisena $date asti. Sen jälkeen sinut siirretään ilmaisversioon rajoitetuilla ominaisuuksilla.';
+  }
+
+  @override
+  String get ifYouCancel => 'Jos peruutat:';
+
+  @override
+  String get cancelConsequenceNoAccess => 'Ei enää rajoittamatonta pääsyä laskutusjakson lopussa.';
+
+  @override
+  String get cancelConsequenceBattery => '7x enemmän akunkäyttöä (laitteella käsittely)';
+
+  @override
+  String get cancelConsequenceQuality => '30% heikompi transkriptiolaatu (laitteen mallit)';
+
+  @override
+  String get cancelConsequenceDelay => '5-7 sekunnin käsittelyviive (laitteen mallit)';
+
+  @override
+  String get cancelConsequenceSpeakers => 'Ei voi tunnistaa puhujia.';
+
+  @override
+  String get confirmAndCancel => 'Vahvista ja peruuta';
+
+  @override
+  String get cancelConsequencePhoneCalls => 'Ei reaaliaikaista puhelutranskripiota';
+
+  @override
+  String get feedbackTitleTooExpensive => 'Mikä hinta sopisi sinulle?';
+
+  @override
+  String get feedbackTitleMissingFeatures => 'Mitä ominaisuuksia kaipaat?';
+
+  @override
+  String get feedbackTitleAudioQuality => 'Mitä ongelmia koit?';
+
+  @override
+  String get feedbackTitleBatteryDrain => 'Kerro meille akkuongelmista';
+
+  @override
+  String get feedbackTitleFoundAlternative => 'Mihin vaihdat?';
+
+  @override
+  String get feedbackTitleNotUsing => 'Mikä saisi sinut käyttämään Omia enemmän?';
+
+  @override
+  String get feedbackSubtitleTooExpensive => 'Palautteesi auttaa meitä löytämään oikean tasapainon.';
+
+  @override
+  String get feedbackSubtitleMissingFeatures => 'Rakennamme aina — tämä auttaa meitä priorisoimaan.';
+
+  @override
+  String get feedbackSubtitleAudioQuality => 'Haluaisimme ymmärtää, mikä meni pieleen.';
+
+  @override
+  String get feedbackSubtitleBatteryDrain => 'Tämä auttaa laitteistotiimiämme parantamaan.';
+
+  @override
+  String get feedbackSubtitleFoundAlternative => 'Haluaisimme tietää, mikä kiinnitti huomiosi.';
+
+  @override
+  String get feedbackSubtitleNotUsing => 'Haluamme tehdä Omista hyödyllisemmän sinulle.';
+
+  @override
+  String get deviceDiagnostics => 'Laitediagnostiikka';
+
+  @override
+  String get signalStrength => 'Signaalin voimakkuus';
+
+  @override
+  String get connectionUptime => 'Käyttöaika';
+
+  @override
+  String get reconnections => 'Uudelleenyhdistämiset';
+
+  @override
+  String get disconnectHistory => 'Katkaisuhistoria';
+
+  @override
+  String get noDisconnectsRecorded => 'Katkaisuja ei ole tallennettu';
+
+  @override
+  String get diagnostics => 'Diagnostiikka';
+
+  @override
+  String get waitingForData => 'Odotetaan tietoja...';
+
+  @override
+  String get liveRssiOverTime => 'Reaaliaikainen RSSI ajan myötä';
+
+  @override
+  String get noRssiDataYet => 'Ei vielä RSSI-tietoja';
+
+  @override
+  String get collectingData => 'Kerätään tietoja...';
+
+  @override
+  String get cleanDisconnect => 'Puhdas katkaisu';
+
+  @override
+  String get connectionTimeout => 'Yhteyden aikakatkaisu';
+
+  @override
+  String get remoteDeviceTerminated => 'Etälaite katkaisi yhteyden';
+
+  @override
+  String get pairedToAnotherPhone => 'Yhdistetty toiseen puhelimeen';
+
+  @override
+  String get linkKeyMismatch => 'Yhteysavaimen ristiriita';
+
+  @override
+  String get connectionFailed => 'Yhteys epäonnistui';
+
+  @override
+  String get appClosed => 'Sovellus suljettu';
+
+  @override
+  String get manualDisconnect => 'Manuaalinen katkaisu';
+
+  @override
+  String lastNEvents(int count) {
+    return 'Viimeiset $count tapahtumaa';
+  }
+
+  @override
+  String get signal => 'Signaali';
+
+  @override
+  String get battery => 'Akku';
+
+  @override
+  String get excellent => 'Erinomainen';
+
+  @override
+  String get good => 'Hyvä';
+
+  @override
+  String get fair => 'Kohtalainen';
+
+  @override
+  String get weak => 'Heikko';
+
+  @override
+  String gattError(String code) {
+    return 'GATT-virhe ($code)';
+  }
+
+  @override
+  String get rollbackToStableFirmware => 'Palaa vakaaseen laiteohjelmistoon';
+
+  @override
+  String get rollbackConfirmTitle => 'Palauta laiteohjelmisto?';
+
+  @override
+  String rollbackConfirmMessage(String version) {
+    return 'Tämä korvaa nykyisen laiteohjelmiston uusimmalla vakaalla versiolla ($version). Laitteesi käynnistyy uudelleen päivityksen jälkeen.';
+  }
+
+  @override
+  String get stableFirmware => 'Vakaa laiteohjelmisto';
+
+  @override
+  String get fetchingStableFirmware => 'Haetaan uusinta vakaata laiteohjelmistoa...';
+
+  @override
+  String get noStableFirmwareFound => 'Laitteellesi ei löytynyt vakaata laiteohjelmistoversiota.';
+
+  @override
+  String get installStableFirmware => 'Asenna vakaa laiteohjelmisto';
+
+  @override
+  String get alreadyOnStableFirmware => 'Sinulla on jo uusin vakaa versio.';
+
+  @override
+  String audioSavedLocally(String duration) {
+    return '$duration ääntä tallennettu paikallisesti';
+  }
+
+  @override
+  String get willSyncAutomatically => 'synkronoidaan automaattisesti';
+
+  @override
+  String get enableLocationTitle => 'Enable Location';
+
+  @override
+  String get enableLocationDescription => 'Location permission is needed to find nearby Bluetooth devices.';
 }

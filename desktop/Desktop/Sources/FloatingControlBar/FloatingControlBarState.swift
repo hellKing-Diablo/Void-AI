@@ -19,10 +19,13 @@ struct FloatingBarNotification: Identifiable, Equatable {
 /// Observable object holding the state for the floating control bar.
 @MainActor
 class FloatingControlBarState: NSObject, ObservableObject {
+    static let visibleConversationReuseInterval: TimeInterval = 10 * 60
+
     @Published var isRecording: Bool = false
     @Published var duration: Int = 0
     @Published var isInitialising: Bool = false
     @Published var isDragging: Bool = false
+    @Published var isHoveringBar: Bool = false
     @Published var currentNotification: FloatingBarNotification? = nil
 
     // AI conversation state
@@ -35,6 +38,7 @@ class FloatingControlBarState: NSObject, ObservableObject {
     @Published var inputViewHeight: CGFloat = 120
     @Published var responseContentHeight: CGFloat = 0
     @Published var chatHistory: [FloatingChatExchange] = []
+    @Published var lastConversationActivityAt: Date? = nil
 
     /// Convenience accessor for plain-text response (used by window geometry and error handling).
     var aiResponseText: String {
@@ -68,5 +72,30 @@ class FloatingControlBarState: NSObject, ObservableObject {
 
     var isShowingNotification: Bool {
         currentNotification != nil
+    }
+
+    var hasVisibleConversation: Bool {
+        !chatHistory.isEmpty || currentAIMessage != nil || !displayedQuery.isEmpty
+    }
+
+    var canRestoreVisibleConversation: Bool {
+        guard hasVisibleConversation, let lastConversationActivityAt else { return false }
+        return Date().timeIntervalSince(lastConversationActivityAt) <= Self.visibleConversationReuseInterval
+    }
+
+    func markConversationActivity(at date: Date = Date()) {
+        lastConversationActivityAt = date
+    }
+
+    func clearVisibleConversation() {
+        aiInputText = ""
+        displayedQuery = ""
+        currentAIMessage = nil
+        chatHistory = []
+        showingAIResponse = false
+        isAILoading = false
+        isVoiceFollowUp = false
+        voiceFollowUpTranscript = ""
+        lastConversationActivityAt = nil
     }
 }

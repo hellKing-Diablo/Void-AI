@@ -137,15 +137,10 @@ final class UpdaterDelegate: NSObject, SPUUpdaterDelegate {
       }
 
       // SUInstallationError (4005): Sparkle's installer failed to launch.
-      // On macOS 26, AuthorizationCreate/SMJobSubmit can fail due to stricter
-      // code signature validation or on-demand-only launchd mode.
-      // Fallback: open the download page so the user can install manually.
+      // Don't open the browser — Sparkle will retry on next check cycle.
       let isInstallationError = nsError.domain == SUSparkleErrorDomain && nsError.code == 4005
       if isInstallationError {
-        logSync("Sparkle: Installation failed, opening download page as fallback")
-        if let url = URL(string: "https://macos.omi.me") {
-          NSWorkspace.shared.open(url)
-        }
+        logSync("Sparkle: Installation failed (error 4005), will retry on next check")
       }
     }
   }
@@ -317,6 +312,13 @@ final class UpdaterViewModel: ObservableObject {
   }
 
   private init() {
+    // Restore beta for users whose preference was overwritten by the March 27 bug
+    AppBuild.migrateBetaChannelOverwrite()
+
+    if UserDefaults.standard.string(forKey: kUpdateChannelKey) == nil {
+      AppBuild.syncUpdateChannelOnFirstLaunch()
+    }
+
     // Initialize the updater controller with our delegate
     updaterController = SPUStandardUpdaterController(
       startingUpdater: true,
@@ -329,9 +331,9 @@ final class UpdaterViewModel: ObservableObject {
     automaticallyDownloadsUpdates = updaterController.updater.automaticallyDownloadsUpdates
 
     // Initialize update channel from UserDefaults
-    // Normalize legacy "staging" → "beta" for users upgrading from older builds
+    // Normalize legacy "staging" → "beta" and "better" → "beta"
     var storedChannel = UserDefaults.standard.string(forKey: kUpdateChannelKey) ?? "stable"
-    if storedChannel == "staging" { storedChannel = "beta" }
+    if storedChannel == "staging" || storedChannel == "better" { storedChannel = "beta" }
     updateChannel = UpdateChannel(rawValue: storedChannel) ?? .stable
 
     // Wire up delegate back-reference

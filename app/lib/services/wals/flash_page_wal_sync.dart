@@ -128,20 +128,22 @@ class FlashPageWalSyncImpl implements FlashPageWalSync {
       var pd = await _device!.getDeviceInfo(connection);
       String deviceModel = pd.modelNumber.isNotEmpty ? pd.modelNumber : "Limitless";
 
-      wals.add(Wal(
-        codec: BleAudioCodec.opus,
-        timerStart: timerStart,
-        status: WalStatus.miss,
-        storage: WalStorage.flashPage,
-        seconds: estimatedSeconds,
-        storageOffset: _oldestPage,
-        storageTotalBytes: _newestPage,
-        fileNum: _currentSession,
-        device: _device!.id,
-        deviceModel: deviceModel,
-        totalFrames: pageCount * framesPerFlashPage,
-        syncedFrameOffset: 0,
-      ));
+      wals.add(
+        Wal(
+          codec: BleAudioCodec.opus,
+          timerStart: timerStart,
+          status: WalStatus.miss,
+          storage: WalStorage.flashPage,
+          seconds: estimatedSeconds,
+          storageOffset: _oldestPage,
+          storageTotalBytes: _newestPage,
+          fileNum: _currentSession,
+          device: _device!.id,
+          deviceModel: deviceModel,
+          totalFrames: pageCount * framesPerFlashPage,
+          syncedFrameOffset: 0,
+        ),
+      );
     }
 
     return wals;
@@ -348,6 +350,19 @@ class FlashPageWalSyncImpl implements FlashPageWalSync {
           }
         }
 
+        // Send periodic ACK for diagnostic-only pages (no audio accumulated)
+        if (pageData != null && !shouldSave && accumulatedFrames.isEmpty && lastProcessedIndex != null) {
+          if (DateTime.now().difference(lastSaveTime) >= _persistBatchDuration) {
+            try {
+              await limitlessConnection.acknowledgeProcessedData(lastProcessedIndex);
+              Logger.debug("FlashPageSync: Diagnostic-only ACK sent for page $lastProcessedIndex");
+              lastSaveTime = DateTime.now();
+            } catch (e) {
+              Logger.debug("FlashPageSync: Diagnostic ACK failed: $e");
+            }
+          }
+        }
+
         if (shouldSave && accumulatedFrames.isNotEmpty) {
           final filePath = await _saveBatchToFile(
             accumulatedFrames,
@@ -358,7 +373,8 @@ class FlashPageWalSyncImpl implements FlashPageWalSync {
           if (filePath != null) {
             filesSaved++;
             Logger.debug(
-                "FlashPageSync: Saved batch #$filesSaved to disk (${accumulatedFrames.length} frames, ts=$batchMinTimestamp)");
+              "FlashPageSync: Saved batch #$filesSaved to disk (${accumulatedFrames.length} frames, ts=$batchMinTimestamp)",
+            );
 
             if (lastProcessedIndex != null) {
               try {
@@ -414,7 +430,8 @@ class FlashPageWalSyncImpl implements FlashPageWalSync {
               final remainingPages = endPage - lastProcessedIndex;
               wal.seconds = (remainingPages * secondsPerFlashPage).round();
               Logger.debug(
-                  "FlashPageSync: Updated WAL - new start page: ${wal.storageOffset}, remaining: $remainingPages pages");
+                "FlashPageSync: Updated WAL - new start page: ${wal.storageOffset}, remaining: $remainingPages pages",
+              );
             } catch (e) {
               Logger.debug("FlashPageSync: Cancel ACK failed: $e");
             }

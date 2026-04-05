@@ -100,11 +100,6 @@ env:
       secretKeyRef:
         name: dev-omi-backend-secrets
         key: FAL_KEY
-  - name: SONIOX_API_KEY
-    valueFrom:
-      secretKeyRef:
-        name: dev-omi-backend-secrets
-        key: SONIOX_API_KEY
   - name: HOSTED_VAD_API_URL
     value: "http://vad.omiapi.com:80/v1/vad"
   - name: HOSTED_SPEECH_PROFILE_API_URL
@@ -317,6 +312,22 @@ autoscaling:
       selectPolicy: Max
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 70
+
+podDisruptionBudget:
+  minAvailable: "80%"
+  # maxUnavailable: "20%"
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 2
+
+terminationGracePeriodSeconds: 120
+lifecycle:
+  preStop:
+    exec:
+      command: ["sh", "-c", "sleep 15"]
 
 # Additional volumes on the output Deployment definition.
 volumes: []

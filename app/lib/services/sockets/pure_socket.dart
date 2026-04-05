@@ -172,12 +172,6 @@ class PureSocket implements IPureSocket {
         return 'abnormal_closure';
       case 1011:
         return 'server_error';
-      case 1012:
-        return 'service_restart';
-      case 1013:
-        return 'try_again_later';
-      case 4002:
-        return 'out_of_credits';
       default:
         return 'unknown';
     }
