@@ -616,6 +616,23 @@ if _so_gemini:
 ANTHROPIC_AGENT_MODEL = get_model('chat_agent')
 ANTHROPIC_AGENT_COMPLEX_MODEL = get_model('chat_agent')
 
+# ---------------------------------------------------------------------------
+# OpenAI agent clients — used when CHAT_PROVIDER=openai
+# These allow self-hosters without Anthropic credentials to run the chat agent
+# using their existing OpenAI API key. The Anthropic path is the default.
+# ---------------------------------------------------------------------------
+_OPENAI_AGENT_MODEL = 'gpt-4o'
+llm_agent = ChatOpenAI(
+    model=_OPENAI_AGENT_MODEL,
+    callbacks=[_usage_callback],
+)
+llm_agent_stream = ChatOpenAI(
+    model=_OPENAI_AGENT_MODEL,
+    streaming=True,
+    stream_options={"include_usage": True},
+    callbacks=[_usage_callback],
+)
+
 
 # ---------------------------------------------------------------------------
 # Legacy module-level alias (kept for test compatibility).
