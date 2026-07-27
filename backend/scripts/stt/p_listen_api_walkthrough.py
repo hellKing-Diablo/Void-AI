@@ -180,7 +180,7 @@ async def run_listen_test(
         ws = await asyncio.wait_for(
             websockets.connect(
                 url,
-                additional_headers=DEV_AUTH_HEADER,
+                extra_headers=DEV_AUTH_HEADER,
                 ping_timeout=None,
                 ping_interval=None,
                 max_size=None,

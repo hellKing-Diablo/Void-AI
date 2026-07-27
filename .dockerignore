@@ -1,1 +1,8 @@
+backend/.env
+backend/.env.*
+!backend/.env*.template
+backend/venv
 backend/google-credentials.json
+**/__pycache__
+.git
+app/build
