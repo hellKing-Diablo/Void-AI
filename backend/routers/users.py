@@ -1,14 +1,16 @@
-import json
-import threading
+from __future__ import annotations
+
+import re
 import uuid
 from typing import List, Dict, Any, Union, Optional
 import hashlib
 import os
+import asyncio
 
 import pytz
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from database import (
     conversations as conversations_db,
@@ -18,7 +20,13 @@ from database import (
     notifications as notification_db,
     daily_summaries as daily_summaries_db,
     llm_usage as llm_usage_db,
+    users as users_db,
 )
+from database.sync_jobs import release_job_run_lock, try_acquire_job_run_lock
+from services.users.data_export import iter_user_data_export
+from services.users.account_deletion import background_wipe_user_data, start_account_deletion
+from database.app_review_config import should_hide_subscription_ui
+from database.webhook_health import record_dev_webhook_success
 from database.conversations import get_in_progress_conversation, get_conversation
 from database.redis_db import (
     cache_user_geolocation,
@@ -32,29 +40,73 @@ from database.redis_db import (
     set_user_data_protection_level,
     get_generic_cache,
     set_generic_cache,
+    get_daily_summary_uid,
+    store_daily_summary_to_uid,
+    remove_daily_summary_to_uid,
 )
+
 from database.users import (
+    claim_deletion_wipe_for_task,
     get_user_transcription_preferences,
+    resolve_deletion_wipe_job_id,
+    resolve_legacy_deletion_wipe_uid,
     set_user_transcription_preferences,
 )
-from utils.stt.streaming import deepgram_nova3_multi_languages
+from config.stt_provider_policy import supports_live_multilingual_mode
+from utils.user_language import normalize_user_language
 from database.users import *
-from models.conversation import Geolocation, Conversation
+from models.conversation import Conversation
+from models.geolocation import Geolocation
+from utils.conversations.factory import deserialize_conversation, deserialize_conversations
 from models.other import Person, CreatePerson
+from models.shared import StatusResponse
 from typing import Optional
 from models.user_usage import UserUsageResponse, UsagePeriod
 from datetime import datetime, time, timedelta
 
-from models.users import WebhookType, UserSubscriptionResponse, SubscriptionPlan, PlanType, PricingOption
+from models.users import (
+    ChatUsageQuota,
+    ChatQuotaUnit,
+    WebhookType,
+    UserSubscriptionResponse,
+    Subscription,
+    SubscriptionPlan,
+    SubscriptionStatus,
+    PlanType,
+    PricingOption,
+    PhoneCallQuota,
+    TrialMetadata,
+)
+from utils.phone_calls import get_quota_snapshot as get_phone_call_quota_snapshot
 from utils.apps import get_available_app_by_id
 from utils.subscription import (
+    get_chat_quota_snapshot,
     get_paid_plan_definitions,
+    get_plan_display_name,
     get_plan_limits,
     get_plan_features,
     get_monthly_usage_for_subscription,
+    is_trial_paywalled,
+    neo_grandfather_until,
     reconcile_basic_plan_with_stripe,
+    filter_plans_for_user,
+    has_ever_purchased,
+    should_show_new_plans,
+    adapt_plans_for_legacy_client,
+    wire_plan_for_client,
+    legacy_plan_features,
+    clear_trial_paywall_cache,
+    get_trial_metadata,
 )
+from database import user_usage as user_usage_db
 from utils import stripe as stripe_utils
+from utils.cloud_tasks import (
+    AccountDeletionTaskAuthentication,
+    get_account_deletion_tasks_max_attempts,
+    verify_account_deletion_cloud_tasks_oidc,
+)
+from utils.executors import cleanup_executor, db_executor, run_blocking
+from utils.log_sanitizer import sanitize
 from utils.llm.followup import followup_question_prompt
 from utils.notifications import send_notification, send_training_data_submitted_notification
 from utils.llm.external_integrations import generate_comprehensive_daily_summary
@@ -67,8 +119,7 @@ from utils.other.storage import (
     delete_user_person_speech_sample,
 )
 from utils.webhooks import webhook_first_time_setup
-from database.action_items import get_action_items as get_standalone_action_items
-from google.cloud import firestore as cloud_firestore
+from utils.byok import has_byok_keys, invalidate_byok_state_cache
 import logging
 
 logger = logging.getLogger(__name__)
@@ -90,28 +141,283 @@ class BatchMigrationRequest(BaseModel):
     requests: List[MigrationRequest]
 
 
-@router.get('/v1/users/profile', tags=['v1'])
+class MigrationStatusResponse(BaseModel):
+    status: str
+    message: Optional[str] = None
+
+
+class MigrationRequestsResponse(BaseModel):
+    needs_migration: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class UserStatusResponse(BaseModel):
+    status: str
+    message: Optional[str] = None
+
+
+class UserProfileResponse(BaseModel):
+    model_config = ConfigDict(extra='allow')
+
+    uid: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+    time_zone: Optional[str] = None
+    created_at: Optional[datetime] = None
+    motivation: Optional[str] = None
+    use_case: Optional[str] = None
+    job: Optional[str] = None
+    company: Optional[str] = None
+    data_protection_level: Optional[str] = None
+    migration_status: Optional[Dict[str, Any]] = None
+
+
+class UserWebhooksStatusResponse(BaseModel):
+    audio_bytes: bool
+    memory_created: bool
+    realtime_transcript: bool
+    day_summary: bool
+
+
+class UserWebhookUrlResponse(BaseModel):
+    url: Optional[str] = None
+
+
+class UserDataExportResponse(BaseModel):
+    profile: Dict[str, Any] = Field(default_factory=dict)
+    conversations: List[Dict[str, Any]] = Field(default_factory=list)
+    memories: List[Dict[str, Any]] = Field(default_factory=list)
+    people: List[Dict[str, Any]] = Field(default_factory=list)
+    action_items: List[Dict[str, Any]] = Field(default_factory=list)
+    chat_messages: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class StoreRecordingPermissionResponse(BaseModel):
+    store_recording_permission: bool
+
+
+class PrivateCloudSyncResponse(BaseModel):
+    private_cloud_sync_enabled: bool
+
+
+class OnboardingStateResponse(BaseModel):
+    completed: bool = False
+    acquisition_source: str = ''
+    device_onboarding_completed: bool = False
+
+
+class UserLanguageResponse(BaseModel):
+    language: Optional[str] = None
+
+
+class UserLanguageUpdateResponse(UserStatusResponse):
+    single_language_mode: bool
+
+
+class MemorySummaryRatingResponse(BaseModel):
+    has_rating: bool
+    rating: Optional[int] = None
+
+
+class TrainingDataOptInResponse(BaseModel):
+    opted_in: bool
+    status: Optional[str] = None
+
+
+class DailySummaryTestResponse(UserStatusResponse):
+    summary_id: str
+    conversations_count: int
+
+
+class DailySummaryActionItem(BaseModel):
+    description: Optional[str] = None
+    priority: Optional[str] = None
+    source_conversation_id: Optional[str] = None
+    completed: Optional[bool] = None
+
+
+class DailySummaryTopicHighlight(BaseModel):
+    topic: Optional[str] = None
+    emoji: Optional[str] = None
+    summary: Optional[str] = None
+    conversation_ids: Optional[List[str]] = None
+
+
+class DailySummaryUnresolvedQuestion(BaseModel):
+    question: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+
+class DailySummaryDecisionMade(BaseModel):
+    decision: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+
+class DailySummaryKnowledgeNugget(BaseModel):
+    insight: Optional[str] = None
+    conversation_id: Optional[str] = None
+
+
+class DailySummaryDayStats(BaseModel):
+    total_conversations: Optional[int] = None
+    total_duration_minutes: Optional[int] = None
+    action_items_count: Optional[int] = None
+
+
+class DailySummaryLocationPin(BaseModel):
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    address: Optional[str] = None
+    conversation_id: Optional[str] = None
+    time: Optional[str] = None
+
+
+class DailySummaryResponse(BaseModel):
+    model_config = ConfigDict(extra='allow')
+
+    id: Optional[str] = None
+    date: Optional[str] = None
+    created_at: Optional[datetime] = None
+    headline: Optional[str] = None
+    overview: Optional[str] = None
+    day_emoji: Optional[str] = None
+    stats: Optional[DailySummaryDayStats] = None
+    highlights: Optional[List[DailySummaryTopicHighlight]] = None
+    action_items: Optional[List[DailySummaryActionItem]] = None
+    unresolved_questions: Optional[List[DailySummaryUnresolvedQuestion]] = None
+    decisions_made: Optional[List[DailySummaryDecisionMade]] = None
+    knowledge_nuggets: Optional[List[DailySummaryKnowledgeNugget]] = None
+    locations: Optional[List[DailySummaryLocationPin]] = None
+
+
+class DailySummariesResponse(BaseModel):
+    summaries: List[DailySummaryResponse] = Field(default_factory=list)
+
+
+@router.get('/v1/users/profile', tags=['v1'], response_model=UserProfileResponse)
 def get_user_profile_endpoint(uid: str = Depends(auth.get_current_user_uid)):
     """Gets the full user profile, including data protection and migration status."""
     profile = get_user_profile(uid)
     if not profile:
         raise HTTPException(status_code=410, detail="User not found")
+    profile.setdefault('uid', uid)
     return profile
 
 
-@router.delete('/v1/users/delete-account', tags=['v1'])
-def delete_account(uid: str = Depends(auth.get_current_user_uid)):
+class DeleteAccountRequest(BaseModel):
+    reason: Optional[str] = None
+    reason_details: Optional[str] = None
+
+
+@router.delete('/v1/users/delete-account', tags=['v1'], response_model=UserStatusResponse)
+def delete_account(
+    request: DeleteAccountRequest = DeleteAccountRequest(),
+    uid: str = Depends(auth.get_current_user_uid),
+):
     try:
-        delete_user_data(uid)
-        # delete user from firebase auth
-        auth.delete_account(uid)
-        return {'status': 'ok', 'message': 'Account deleted successfully'}
+        return start_account_deletion(uid, reason=request.reason, reason_details=request.reason_details)
     except Exception as e:
-        logger.info(f'delete_account {str(e)}')
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.info(f'delete_account {sanitize(str(e))}')
+        raise HTTPException(status_code=500, detail='Could not delete account. Please try again.')
 
 
-@router.patch('/v1/users/geolocation', tags=['v1'])
+# response_model omitted: include_in_schema=False Cloud Tasks handler; JSONResponse
+# status codes drive queue retry/ack behavior.
+@router.post('/v1/users/account-deletion-wipes/run', include_in_schema=False)
+async def run_account_deletion_wipe(
+    request: Request,
+    task_authentication: AccountDeletionTaskAuthentication = Depends(verify_account_deletion_cloud_tasks_oidc),
+):
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise ValueError('payload must be a JSON object')
+        if 'job_id' in payload:
+            wipe_job_id = payload['job_id']
+            if not isinstance(wipe_job_id, str) or not wipe_job_id:
+                raise ValueError('job_id must be a non-empty string')
+            resolution_fn = resolve_deletion_wipe_job_id
+            resolution_arg = wipe_job_id
+            payload_kind = 'job_id'
+        else:
+            # TODO(#9760): Remove this legacy branch after the Cloud Tasks max-retry window has elapsed.
+            legacy_uid = payload.get('uid')
+            if not isinstance(legacy_uid, str) or not legacy_uid:
+                raise ValueError('job_id must be a non-empty string')
+            resolution_fn = resolve_legacy_deletion_wipe_uid
+            resolution_arg = legacy_uid
+            payload_kind = 'legacy_uid'
+    except Exception as e:
+        logger.error(f'account_deletion handler: invalid payload, dropping task: {sanitize(str(e))}')
+        return JSONResponse(status_code=200, content={'status': 'dropped', 'reason': 'invalid_payload'})
+
+    if task_authentication.audience == 'legacy_sync' and payload_kind != 'legacy_uid':
+        logger.warning('account_deletion handler: dropping job-ID payload with legacy sync audience')
+        return JSONResponse(status_code=200, content={'status': 'dropped', 'reason': 'legacy_audience_for_job_id'})
+
+    if payload_kind == 'legacy_uid' and task_authentication.audience != 'legacy_sync':
+        logger.warning('account_deletion handler: dropping legacy uid payload with non-legacy audience')
+        return JSONResponse(
+            status_code=200, content={'status': 'dropped', 'reason': 'legacy_uid_requires_legacy_audience'}
+        )
+
+    try:
+        resolution = await run_blocking(db_executor, resolution_fn, resolution_arg)
+    except Exception as e:
+        logger.error(f'account_deletion handler: job resolution failed, will retry: {sanitize(str(e))}')
+        return JSONResponse(status_code=500, content={'status': 'retry'})
+
+    resolution_outcome = resolution.get('outcome') if isinstance(resolution, dict) else None
+    uid = resolution.get('uid') if isinstance(resolution, dict) else None
+    if resolution_outcome != 'resolved' or not isinstance(uid, str) or not uid:
+        logger.warning(
+            'account_deletion handler: dropping task payload_kind=%s resolution=%s', payload_kind, resolution_outcome
+        )
+        return JSONResponse(
+            status_code=200, content={'status': 'dropped', 'reason': resolution_outcome or 'invalid_job'}
+        )
+
+    lock_key = f'account-deletion:{uid}'
+    lock_token = await run_blocking(db_executor, try_acquire_job_run_lock, lock_key)
+    if not lock_token:
+        logger.warning(f'account_deletion handler: run-lock held for {uid}, deferring')
+        return JSONResponse(status_code=409, content={'status': 'locked'})
+
+    release_lock = True
+    try:
+        claim_status = await run_blocking(db_executor, claim_deletion_wipe_for_task, uid)
+        if claim_status == 'completed':
+            return JSONResponse(status_code=200, content={'status': 'acked', 'job_status': 'completed'})
+        if claim_status == 'running':
+            return JSONResponse(status_code=409, content={'status': 'running'})
+        if claim_status != 'claimed':
+            logger.warning(f'account_deletion handler: non-actionable task for {uid}, claim_status={claim_status}')
+            return JSONResponse(status_code=200, content={'status': 'dropped', 'reason': claim_status})
+
+        ok = await run_blocking(cleanup_executor, background_wipe_user_data, uid)
+        if ok:
+            return JSONResponse(status_code=200, content={'status': 'done'})
+
+        max_attempts = get_account_deletion_tasks_max_attempts()
+        if task_authentication.retry_count >= max_attempts - 1:
+            logger.error(
+                f'account_deletion handler: final attempt {task_authentication.retry_count + 1} failed for {uid}'
+            )
+            return JSONResponse(status_code=200, content={'status': 'failed_final'})
+
+        logger.warning(
+            f'account_deletion handler: attempt {task_authentication.retry_count + 1} failed for {uid}, will retry'
+        )
+        return JSONResponse(status_code=500, content={'status': 'retry'})
+    except asyncio.CancelledError:
+        release_lock = False
+        logger.warning(f'account_deletion handler cancelled for {uid}; preserving run-lock until TTL')
+        raise
+    finally:
+        if release_lock:
+            await run_blocking(db_executor, release_job_run_lock, lock_key, lock_token)
+
+
+@router.patch('/v1/users/geolocation', tags=['v1'], response_model=UserStatusResponse)
 def set_user_geolocation(geolocation: Geolocation, uid: str = Depends(auth.get_current_user_uid)):
     last_location_data = get_cached_user_geolocation(uid)
     if last_location_data:
@@ -127,13 +433,13 @@ def set_user_geolocation(geolocation: Geolocation, uid: str = Depends(auth.get_c
             if last_lat == new_lat and last_lon == new_lon:
                 return {'status': 'ok', 'message': 'Location not changed significantly.'}
 
-            cache_user_geolocation(uid, geolocation.dict())
+            cache_user_geolocation(uid, geolocation.model_dump())
         except Exception as e:
             logger.error(f"Error processing geolocation update, caching new location anyway. Error: {e}")
-            cache_user_geolocation(uid, geolocation.dict())
+            cache_user_geolocation(uid, geolocation.model_dump())
     else:
         # No previous location, so cache the new one
-        cache_user_geolocation(uid, geolocation.dict())
+        cache_user_geolocation(uid, geolocation.model_dump())
 
     return {'status': 'ok'}
 
@@ -143,33 +449,40 @@ def set_user_geolocation(geolocation: Geolocation, uid: str = Depends(auth.get_c
 # ***********************************************
 
 
-@router.post('/v1/users/developer/webhook/{wtype}', tags=['v1'])
-def set_user_webhook_endpoint(wtype: WebhookType, data: dict, uid: str = Depends(auth.get_current_user_uid)):
-    url = data['url']
+class SetUserWebhookUrlRequest(BaseModel):
+    url: str
+
+
+@router.post('/v1/users/developer/webhook/{wtype}', tags=['v1'], response_model=UserStatusResponse)
+def set_user_webhook_endpoint(
+    wtype: WebhookType, data: SetUserWebhookUrlRequest, uid: str = Depends(auth.get_current_user_uid)
+):
+    url = data.url
     if url == '' or url == ',':
         disable_user_webhook_db(uid, wtype)
     set_user_webhook_db(uid, wtype, url)
     return {'status': 'ok'}
 
 
-@router.get('/v1/users/developer/webhook/{wtype}', tags=['v1'])
+@router.get('/v1/users/developer/webhook/{wtype}', tags=['v1'], response_model=UserWebhookUrlResponse)
 def get_user_webhook_endpoint(wtype: WebhookType, uid: str = Depends(auth.get_current_user_uid)):
     return {'url': get_user_webhook_db(uid, wtype)}
 
 
-@router.post('/v1/users/developer/webhook/{wtype}/disable', tags=['v1'])
+@router.post('/v1/users/developer/webhook/{wtype}/disable', tags=['v1'], response_model=UserStatusResponse)
 def disable_user_webhook_endpoint(wtype: WebhookType, uid: str = Depends(auth.get_current_user_uid)):
     disable_user_webhook_db(uid, wtype)
     return {'status': 'ok'}
 
 
-@router.post('/v1/users/developer/webhook/{wtype}/enable', tags=['v1'])
+@router.post('/v1/users/developer/webhook/{wtype}/enable', tags=['v1'], response_model=UserStatusResponse)
 def enable_user_webhook_endpoint(wtype: WebhookType, uid: str = Depends(auth.get_current_user_uid)):
     enable_user_webhook_db(uid, wtype)
+    record_dev_webhook_success(uid, wtype.value)
     return {'status': 'ok'}
 
 
-@router.get('/v1/users/developer/webhooks/status', tags=['v1'])
+@router.get('/v1/users/developer/webhooks/status', tags=['v1'], response_model=UserWebhooksStatusResponse)
 def get_user_webhooks_status(uid: str = Depends(auth.get_current_user_uid)):
     # This only happens the first time because the user_webhook_status_db function will return None for existing users
     audio_bytes = user_webhook_status_db(uid, WebhookType.audio_bytes)
@@ -197,18 +510,18 @@ def get_user_webhooks_status(uid: str = Depends(auth.get_current_user_uid)):
 # *************************************************
 
 
-@router.post('/v1/users/store-recording-permission', tags=['v1'])
+@router.post('/v1/users/store-recording-permission', tags=['v1'], response_model=UserStatusResponse)
 def store_recording_permission(value: bool, uid: str = Depends(auth.get_current_user_uid)):
     set_user_store_recording_permission(uid, value)
     return {'status': 'ok'}
 
 
-@router.get('/v1/users/store-recording-permission', tags=['v1'])
+@router.get('/v1/users/store-recording-permission', tags=['v1'], response_model=StoreRecordingPermissionResponse)
 def get_store_recording_permission(uid: str = Depends(auth.get_current_user_uid)):
     return {'store_recording_permission': get_user_store_recording_permission(uid)}
 
 
-@router.delete('/v1/users/store-recording-permission', tags=['v1'])
+@router.delete('/v1/users/store-recording-permission', tags=['v1'], response_model=UserStatusResponse)
 def delete_permission_and_recordings(uid: str = Depends(auth.get_current_user_uid)):
     set_user_store_recording_permission(uid, False)
     delete_all_conversation_recordings(uid)
@@ -220,24 +533,33 @@ def delete_permission_and_recordings(uid: str = Depends(auth.get_current_user_ui
 # *************************************************
 
 
-@router.get('/v1/users/onboarding', tags=['v1'])
+@router.get('/v1/users/onboarding', tags=['v1'], response_model=OnboardingStateResponse)
 def get_onboarding_state(uid: str = Depends(auth.get_current_user_uid)):
     """Get the user's onboarding state (completed status, acquisition source, etc.)."""
     state = get_user_onboarding_state(uid)
     return {
         'completed': state.get('completed', False),
         'acquisition_source': state.get('acquisition_source', ''),
+        'device_onboarding_completed': state.get('device_onboarding_completed', False),
     }
 
 
-@router.patch('/v1/users/onboarding', tags=['v1'])
-def update_onboarding_state(data: dict, uid: str = Depends(auth.get_current_user_uid)):
+class OnboardingStateUpdate(BaseModel):
+    completed: Optional[bool] = None
+    acquisition_source: Optional[str] = None
+    device_onboarding_completed: Optional[bool] = None
+
+
+@router.patch('/v1/users/onboarding', tags=['v1'], response_model=UserStatusResponse)
+def update_onboarding_state(data: OnboardingStateUpdate, uid: str = Depends(auth.get_current_user_uid)):
     """Update the user's onboarding state."""
     current_state = get_user_onboarding_state(uid)
-    if 'completed' in data:
-        current_state['completed'] = data['completed']
-    if 'acquisition_source' in data:
-        current_state['acquisition_source'] = data['acquisition_source']
+    if data.completed is not None:
+        current_state['completed'] = data.completed
+    if data.acquisition_source is not None:
+        current_state['acquisition_source'] = data.acquisition_source
+    if data.device_onboarding_completed is not None:
+        current_state['device_onboarding_completed'] = data.device_onboarding_completed
     set_user_onboarding_state(uid, current_state)
     return {'status': 'ok'}
 
@@ -247,13 +569,13 @@ def update_onboarding_state(data: dict, uid: str = Depends(auth.get_current_user
 # *************************************************
 
 
-@router.post('/v1/users/private-cloud-sync', tags=['v1'])
+@router.post('/v1/users/private-cloud-sync', tags=['v1'], response_model=UserStatusResponse)
 def set_private_cloud_sync(value: bool, uid: str = Depends(auth.get_current_user_uid)):
     set_user_private_cloud_sync_enabled(uid, value)
     return {'status': 'ok'}
 
 
-@router.get('/v1/users/private-cloud-sync', tags=['v1'])
+@router.get('/v1/users/private-cloud-sync', tags=['v1'], response_model=PrivateCloudSyncResponse)
 def get_private_cloud_sync(uid: str = Depends(auth.get_current_user_uid)):
     return {'private_cloud_sync_enabled': get_user_private_cloud_sync_enabled(uid)}
 
@@ -313,13 +635,14 @@ def get_all_people(include_speech_samples: bool = True, uid: str = Depends(auth.
     return people
 
 
-@router.patch('/v1/users/people/{person_id}/name', tags=['v1'])
+@router.patch('/v1/users/people/{person_id}/name', tags=['v1'], response_model=UserStatusResponse)
 def update_person_name(
     person_id: str,
     value: str,  # = Field(min_length=2, max_length=40),
     uid: str = Depends(auth.get_current_user_uid),
 ):
-    update_person(uid, person_id, value)
+    if not update_person(uid, person_id, value):
+        raise HTTPException(status_code=404, detail="Person not found")
     return {'status': 'ok'}
 
 
@@ -327,10 +650,13 @@ def update_person_name(
 def delete_person_endpoint(person_id: str, uid: str = Depends(auth.get_current_user_uid)):
     delete_person(uid, person_id)
     delete_user_person_speech_samples(uid, person_id)
-    return {'status': 'ok'}
 
 
-@router.delete('/v1/users/people/{person_id}/speech-samples/{sample_index}', tags=['v1'])
+@router.delete(
+    '/v1/users/people/{person_id}/speech-samples/{sample_index}',
+    tags=['v1'],
+    response_model=UserStatusResponse,
+)
 def delete_person_speech_sample_endpoint(
     person_id: str,
     sample_index: int,
@@ -366,7 +692,13 @@ def delete_person_speech_sample_endpoint(
 # **********************************************************
 
 
-@router.delete('/v1/joan/{memory_id}/followup-question', tags=['v1'], status_code=204)
+class FollowupQuestionResponse(BaseModel):
+    """Response for the Joan follow-up question endpoint (a generated prompt)."""
+
+    result: str = Field(description='Generated follow-up question prompt text.')
+
+
+@router.delete('/v1/joan/{memory_id}/followup-question', tags=['v1'], response_model=FollowupQuestionResponse)
 def delete_person_endpoint(memory_id: str, uid: str = Depends(auth.get_current_user_uid)):
     if memory_id == '0':
         memory = get_in_progress_conversation(uid)
@@ -378,7 +710,7 @@ def delete_person_endpoint(memory_id: str, uid: str = Depends(auth.get_current_u
         raise HTTPException(status_code=404, detail='Conversation not found')
     if memory.get('is_locked', False):
         raise HTTPException(status_code=402, detail='A paid plan is required to access this conversation.')
-    memory = Conversation(**memory)
+    memory = deserialize_conversation(memory)
     return {'result': followup_question_prompt(uid, memory.transcript_segments)}
 
 
@@ -387,7 +719,7 @@ def delete_person_endpoint(memory_id: str, uid: str = Depends(auth.get_current_u
 # **************************************
 
 
-@router.post('/v1/users/analytics/memory_summary', tags=['v1'])
+@router.post('/v1/users/analytics/memory_summary', tags=['v1'], response_model=UserStatusResponse)
 def set_memory_summary_rating(
     memory_id: str,
     value: int,  # 0, 1, -1 (shown)
@@ -397,7 +729,7 @@ def set_memory_summary_rating(
     return {'status': 'ok'}
 
 
-@router.get('/v1/users/analytics/memory_summary', tags=['v1'])
+@router.get('/v1/users/analytics/memory_summary', tags=['v1'], response_model=MemorySummaryRatingResponse)
 def get_memory_summary_rating(
     memory_id: str,
     _: str = Depends(auth.get_current_user_uid),
@@ -409,7 +741,7 @@ def get_memory_summary_rating(
     return {'has_rating': rating.get('value', -1) != -1, 'rating': rating.get('value', -1)}
 
 
-@router.post('/v1/users/analytics/chat_message', tags=['v1'])
+@router.post('/v1/users/analytics/chat_message', tags=['v1'], response_model=UserStatusResponse)
 def set_chat_message_analytics(
     message_id: str,
     value: int,
@@ -474,23 +806,25 @@ def set_chat_message_analytics(
 # ***************************************
 
 
-@router.get('/v1/users/language', tags=['v1'])
+@router.get('/v1/users/language', tags=['v1'], response_model=UserLanguageResponse)
 def get_user_language(uid: str = Depends(auth.get_current_user_uid)):
     """Get the user's preferred language."""
     language = get_user_language_preference(uid)
-    if not language:
-        return {'language': None}
-    return {'language': language}
+    return {'language': language or None}
 
 
-@router.patch('/v1/users/language', tags=['v1'])
-def set_user_language(data: dict, uid: str = Depends(auth.get_current_user_uid)):
+class SetUserLanguageRequest(BaseModel):
+    language: str
+
+
+@router.patch('/v1/users/language', tags=['v1'], response_model=UserLanguageUpdateResponse)
+def set_user_language(data: SetUserLanguageRequest, uid: str = Depends(auth.get_current_user_uid)):
     """Set the user's preferred language (e.g., 'en', 'vi', etc.)."""
-    language = data.get('language')
+    language = normalize_user_language(data.language)
     if not language:
-        raise HTTPException(status_code=400, detail="Language is required")
+        raise HTTPException(status_code=400, detail="A supported language code is required")
     set_user_language_preference(uid, language)
-    single_language_mode = language not in deepgram_nova3_multi_languages
+    single_language_mode = not supports_live_multilingual_mode(language)
     set_user_transcription_preferences(uid, single_language_mode=single_language_mode)
     return {'status': 'ok', 'single_language_mode': single_language_mode}
 
@@ -502,8 +836,10 @@ def set_user_language(data: dict, uid: str = Depends(auth.get_current_user_uid))
 
 class TranscriptionPreferencesResponse(BaseModel):
     single_language_mode: bool = False
-    vocabulary: List[str] = []
+    vocabulary: List[str] = Field(default_factory=list)
     language: str = ''
+    uses_custom_stt: bool = False
+    custom_stt_since: Optional[datetime] = None
 
 
 class TranscriptionPreferencesUpdate(BaseModel):
@@ -518,7 +854,7 @@ def get_transcription_preferences_endpoint(uid: str = Depends(auth.get_current_u
     return prefs
 
 
-@router.patch('/v1/users/transcription-preferences', tags=['v1'])
+@router.patch('/v1/users/transcription-preferences', tags=['v1'], response_model=UserStatusResponse)
 def update_transcription_preferences_endpoint(
     data: TranscriptionPreferencesUpdate, uid: str = Depends(auth.get_current_user_uid)
 ):
@@ -537,7 +873,7 @@ def update_transcription_preferences_endpoint(
 # **************************************
 
 
-@router.post('/v1/users/migration/requests', tags=['v1'])
+@router.post('/v1/users/migration/requests', tags=['v1'], response_model=MigrationStatusResponse)
 def handle_migration_requests(
     request: Union[MigrationRequest, MigrationTargetRequest], uid: str = Depends(auth.get_current_user_uid)
 ):
@@ -579,7 +915,7 @@ def handle_migration_requests(
         return {'status': 'ok', 'message': 'Migration status set.'}
 
 
-@router.get('/v1/users/migration/requests', tags=['v1'])
+@router.get('/v1/users/migration/requests', tags=['v1'], response_model=MigrationRequestsResponse)
 def get_migration_requests(target_level: str, uid: str = Depends(auth.get_current_user_uid)):
     """Checks which documents need to be migrated to the target level."""
     if target_level != 'enhanced':
@@ -592,7 +928,7 @@ def get_migration_requests(target_level: str, uid: str = Depends(auth.get_curren
     return {"needs_migration": needs_migration}
 
 
-@router.post('/v1/users/migration/batch-requests', tags=['v1'])
+@router.post('/v1/users/migration/batch-requests', tags=['v1'], response_model=MigrationStatusResponse)
 def handle_batch_migration_requests(
     batch_request: BatchMigrationRequest, uid: str = Depends(auth.get_current_user_uid)
 ):
@@ -628,7 +964,11 @@ def handle_batch_migration_requests(
     return {'status': 'ok'}
 
 
-@router.post('/v1/users/migration/requests/data-protection-level/finalize', tags=['v1'])
+@router.post(
+    '/v1/users/migration/requests/data-protection-level/finalize',
+    tags=['v1'],
+    response_model=MigrationStatusResponse,
+)
 def finalize_migration_request(request: MigrationTargetRequest, uid: str = Depends(auth.get_current_user_uid)):
     """Finalizes the migration by setting the user's global protection level."""
     if request.target_level != 'enhanced':
@@ -639,7 +979,7 @@ def finalize_migration_request(request: MigrationTargetRequest, uid: str = Depen
     return {'status': 'ok'}
 
 
-@router.put('/v1/users/preferences/app', tags=['v1'])
+@router.put('/v1/users/preferences/app', tags=['v1'], response_model=UserStatusResponse)
 def set_preferred_app_for_user(
     app_id: str = Query(..., description="The ID of the app to set as preferred"),
     uid: str = Depends(auth.get_current_user_uid),
@@ -666,7 +1006,7 @@ def set_preferred_app_for_user(
 # **************************************
 
 
-@router.get('/v1/users/training-data-opt-in', tags=['v1'])
+@router.get('/v1/users/training-data-opt-in', tags=['v1'], response_model=TrainingDataOptInResponse)
 def get_training_data_opt_in_status(uid: str = Depends(auth.get_current_user_uid)):
     """Get the user's training data opt-in status."""
     opt_in_data = get_user_training_data_opt_in(uid)
@@ -675,7 +1015,7 @@ def get_training_data_opt_in_status(uid: str = Depends(auth.get_current_user_uid
     return {'opted_in': True, 'status': opt_in_data.get('status')}
 
 
-@router.post('/v1/users/training-data-opt-in', tags=['v1'])
+@router.post('/v1/users/training-data-opt-in', tags=['v1'], response_model=UserStatusResponse)
 def set_training_data_opt_in_status(uid: str = Depends(auth.get_current_user_uid)):
     """Opt-in for training data program. User's request will be reviewed."""
     set_user_training_data_opt_in(uid, 'pending_review')
@@ -701,13 +1041,102 @@ def get_user_usage_stats_endpoint(
     period: UsagePeriod = UsagePeriod.TODAY,
 ):
     """Gets daily and monthly usage stats for the authenticated user."""
-    stats = user_usage_db.get_current_user_usage(uid, period.value)
+    stats = user_usage_db.get_current_user_usage(uid, period.value, tz_name=notification_db.get_user_time_zone(uid))
     return stats
 
 
+_SHA256_HEX_RE = re.compile(r'^[a-f0-9]{64}$')
+_BYOK_REQUIRED_PROVIDERS = {'openai', 'anthropic', 'gemini', 'deepgram'}
+
+
+class BYOKActivateRequest(BaseModel):
+    fingerprints: Dict[str, str]
+
+
+class BYOKActiveResponse(BaseModel):
+    active: bool
+
+
+@router.post('/v1/users/me/byok-active', tags=['v1'], response_model=BYOKActiveResponse)
+def activate_byok_endpoint(data: BYOKActivateRequest, uid: str = Depends(auth.get_current_user_uid_no_byok_validation)):
+    """Flip the user onto the BYOK free plan.
+
+    The client sends SHA-256 fingerprints of the 4 provider keys so we can
+    detect rotation without ever seeing the keys. The live keys themselves
+    travel on every request as headers; they are never persisted.
+    """
+    missing = _BYOK_REQUIRED_PROVIDERS - set(data.fingerprints.keys())
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing fingerprints for providers: {sorted(missing)}",
+        )
+    for provider, fp in data.fingerprints.items():
+        if provider not in _BYOK_REQUIRED_PROVIDERS:
+            raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+        if not _SHA256_HEX_RE.match(fp):
+            raise HTTPException(
+                status_code=400, detail=f"Invalid fingerprint for {provider}: expected lowercase hex SHA-256 (64 chars)"
+            )
+    users_db.set_byok_active(uid, data.fingerprints)
+    invalidate_byok_state_cache(uid)
+    clear_trial_paywall_cache(uid)
+    return {"active": True}
+
+
+@router.delete('/v1/users/me/byok-active', tags=['v1'], response_model=BYOKActiveResponse)
+def deactivate_byok_endpoint(uid: str = Depends(auth.get_current_user_uid_no_byok_validation)):
+    """Drop the user off the BYOK free plan (keys were cleared client-side)."""
+    users_db.clear_byok_active(uid)
+    invalidate_byok_state_cache(uid)
+    clear_trial_paywall_cache(uid)
+    return {"active": False}
+
+
+def _byok_unlimited_subscription() -> Subscription:
+    """BYOK free plan: unlimited limits, marked with the `byok` feature flag."""
+    return Subscription(
+        plan=PlanType.unlimited,
+        status=SubscriptionStatus.active,
+        features=["byok"],
+        limits=PlanLimits(
+            transcription_seconds=None,
+            words_transcribed=None,
+            insights_gained=None,
+        ),
+    )
+
+
 @router.get('/v1/users/me/subscription', tags=['v1'], response_model=UserSubscriptionResponse)
-def get_user_subscription_endpoint(uid: str = Depends(auth.get_current_user_uid)):
+def get_user_subscription_endpoint(
+    # Keep reachable even when BYOK fingerprints drift — broken-BYOK users
+    # must still see their plan so they can recover.
+    uid: str = Depends(auth.get_current_user_uid_no_byok_validation),
+    x_app_platform: Optional[str] = Header(None, alias='X-App-Platform'),
+    x_app_version: Optional[str] = Header(None, alias='X-App-Version'),
+):
     """Gets the user's subscription plan and usage."""
+    # BYOK free plan: user supplies their own OpenAI/Anthropic/Gemini/Deepgram keys.
+    # Only return unlimited when the request actually carries BYOK headers (desktop).
+    # Mobile (no BYOK headers) should see the real subscription even if BYOK is active.
+    # Synthetic paid-tier quota for BYOK / marketplace-reviewer overrides so
+    # these users aren't surprised by a disabled phone-call feature.
+    unlimited_phone_quota = PhoneCallQuota(has_access=True, is_paid=True)
+
+    if users_db.is_byok_active(uid) and has_byok_keys():
+        return UserSubscriptionResponse(
+            subscription=_byok_unlimited_subscription(),
+            transcription_seconds_used=0,
+            transcription_seconds_limit=0,
+            words_transcribed_used=0,
+            words_transcribed_limit=0,
+            insights_gained_used=0,
+            insights_gained_limit=0,
+            available_plans=[],
+            show_subscription_ui=False,
+            phone_call_quota=unlimited_phone_quota,
+        )
+
     marketplace_reviewers = os.getenv('MARKETPLACE_APP_REVIEWERS', '').split(',')
     if uid in marketplace_reviewers:
         unlimited_sub = Subscription(
@@ -717,7 +1146,6 @@ def get_user_subscription_endpoint(uid: str = Depends(auth.get_current_user_uid)
                 transcription_seconds=None,
                 words_transcribed=None,
                 insights_gained=None,
-                memories_created=None,
             ),
         )
         return UserSubscriptionResponse(
@@ -728,10 +1156,9 @@ def get_user_subscription_endpoint(uid: str = Depends(auth.get_current_user_uid)
             words_transcribed_limit=0,
             insights_gained_used=0,
             insights_gained_limit=0,
-            memories_created_used=0,
-            memories_created_limit=0,
             available_plans=[],
             show_subscription_ui=False,
+            phone_call_quota=unlimited_phone_quota,
         )
     # First, reconcile any "basic but actually unlimited" inconsistencies against Stripe once.
     raw_subscription = get_user_subscription(uid)
@@ -755,7 +1182,15 @@ def get_user_subscription_endpoint(uid: str = Depends(auth.get_current_user_uid)
 
     # Populate dynamic fields for the response
     subscription.limits = get_plan_limits(subscription.plan)
-    subscription.features = get_plan_features(subscription.plan)
+    is_mobile = x_app_platform in ('ios', 'android')
+    subscription.features = get_plan_features(subscription.plan, simplified=is_mobile)
+
+    new_plans_enabled = should_show_new_plans(x_app_platform, x_app_version)
+
+    # Backward-compat: old clients without the `operator` enum value would crash
+    # on deserialization. Only send the real plan type to clients that understand it.
+    if not new_plans_enabled and subscription.plan == PlanType.operator:
+        subscription.plan = PlanType.unlimited
 
     # Get current usage
     usage = get_monthly_usage_for_subscription(uid)
@@ -764,17 +1199,23 @@ def get_user_subscription_endpoint(uid: str = Depends(auth.get_current_user_uid)
     transcription_seconds_used = usage.get('transcription_seconds', 0)
     words_transcribed_used = usage.get('words_transcribed', 0)
     insights_gained_used = usage.get('insights_gained', 0)
-    memories_created_used = usage.get('memories_created', 0)
 
     # Get limits from subscription (0 means unlimited)
     transcription_seconds_limit = subscription.limits.transcription_seconds or 0
     words_transcribed_limit = subscription.limits.words_transcribed or 0
     insights_gained_limit = subscription.limits.insights_gained or 0
-    memories_created_limit = subscription.limits.memories_created or 0
 
-    # Build available plans for upgrading
+    # Build available plans. Version-gated: new clients see Operator + Architect,
+    # old clients get legacy plan names. Legacy plans filtered from purchase catalog.
+    all_definitions = get_paid_plan_definitions()
+    if not new_plans_enabled:
+        all_definitions = adapt_plans_for_legacy_client(all_definitions)
     available_plans: List[SubscriptionPlan] = []
-    for definition in get_paid_plan_definitions():
+    ever_purchased = has_ever_purchased(uid, raw_subscription)
+    definitions_for_user = filter_plans_for_user(
+        all_definitions, subscription.plan, platform=x_app_platform, ever_purchased=ever_purchased
+    )
+    for definition in definitions_for_user:
         plan_prices: List[PricingOption] = []
         monthly_price_id = definition["monthly_price_id"]
         annual_price_id = definition["annual_price_id"]
@@ -796,7 +1237,10 @@ def get_user_subscription_endpoint(uid: str = Depends(auth.get_current_user_uid)
                     )
                 )
             except Exception as e:
-                logger.error(f"Error retrieving monthly price from Stripe for {definition['plan_id']}: {e}")
+                logger.error(
+                    f"Error retrieving monthly price from Stripe for {definition['plan_id']} "
+                    f"(price_id={monthly_price_id}): {sanitize(str(e))}"
+                )
 
         if annual_price_id:
             try:
@@ -815,17 +1259,46 @@ def get_user_subscription_endpoint(uid: str = Depends(auth.get_current_user_uid)
                     )
                 )
             except Exception as e:
-                logger.error(f"Error retrieving annual price from Stripe for {definition['plan_id']}: {e}")
+                logger.error(
+                    f"Error retrieving annual price from Stripe for {definition['plan_id']} "
+                    f"(price_id={annual_price_id}): {sanitize(str(e))}"
+                )
 
         if plan_prices:
+            features = (
+                get_plan_features(definition["plan_type"], simplified=is_mobile)
+                if new_plans_enabled
+                else legacy_plan_features(definition["plan_type"])
+            )
             available_plans.append(
                 SubscriptionPlan(
                     id=definition["plan_id"],
                     title=definition["title"],
-                    features=get_plan_features(definition["plan_type"]),
+                    subtitle=definition.get("subtitle"),
+                    description=definition.get("description"),
+                    eyebrow=definition.get("eyebrow"),
+                    features=features,
                     prices=plan_prices,
+                    legacy=bool(definition.get("legacy")),
                 )
             )
+
+    show_subscription_ui = not should_hide_subscription_ui(uid, x_app_platform, x_app_version)
+
+    # Phone-call feature access + monthly free-tier usage snapshot.
+    phone_call_quota = PhoneCallQuota(**get_phone_call_quota_snapshot(uid).to_client_dict())
+
+    # Chat quota — reuse the shared snapshot helper
+    chat_snapshot = get_chat_quota_snapshot(uid, platform=x_app_platform)
+    chat_percent = 0.0
+    if chat_snapshot['limit'] is not None and chat_snapshot['limit'] > 0:
+        chat_percent = min(100.0, round(100.0 * chat_snapshot['used'] / chat_snapshot['limit'], 2))
+    chat_allowed = chat_snapshot['allowed']
+
+    # Grandfather is read from the true plan before the label is remapped for
+    # clients whose enum predates `plus`/`unlimited_v2` (see wire_plan_for_client).
+    desktop_grandfather_until = neo_grandfather_until(subscription)
+    subscription.plan = wire_plan_for_client(subscription.plan, x_app_platform, x_app_version)
 
     return UserSubscriptionResponse(
         subscription=subscription,
@@ -835,10 +1308,100 @@ def get_user_subscription_endpoint(uid: str = Depends(auth.get_current_user_uid)
         words_transcribed_limit=words_transcribed_limit,
         insights_gained_used=insights_gained_used,
         insights_gained_limit=insights_gained_limit,
-        memories_created_used=memories_created_used,
-        memories_created_limit=memories_created_limit,
         available_plans=available_plans,
+        show_subscription_ui=show_subscription_ui,
+        chat_quota_used=round(chat_snapshot['used'], 4),
+        chat_quota_unit=chat_snapshot['unit'],
+        chat_quota_percent=chat_percent,
+        chat_quota_allowed=chat_allowed,
+        chat_quota_reset_at=chat_snapshot['reset_at'],
+        phone_call_quota=phone_call_quota,
+        desktop_grandfather_until=desktop_grandfather_until,
     )
+
+
+@router.get('/v1/users/me/usage-quota', tags=['users'], response_model=ChatUsageQuota)
+def get_user_chat_usage_quota(
+    uid: str = Depends(auth.get_current_user_uid),
+    x_app_platform: Optional[str] = Header(None, alias='X-App-Platform'),
+):
+    """Current-month chat usage for the user, plus their plan's cap.
+
+    Used by the desktop app. Mobile uses the subscription endpoint instead.
+    """
+    # BYOK free plan: user brings their own keys, so there's no Omi-side cost
+    # to meter. Only return unlimited when BYOK headers are on the request (desktop).
+    # Mobile (no headers) should see real quota.
+    if users_db.is_byok_active(uid) and has_byok_keys():
+        return ChatUsageQuota(
+            plan='Free (BYOK)',
+            plan_type=PlanType.unlimited.value,
+            unit=ChatQuotaUnit.questions,
+            used=0.0,
+            limit=None,
+            percent=0.0,
+            allowed=True,
+            reset_at=None,
+        )
+
+    snapshot = get_chat_quota_snapshot(uid, platform=x_app_platform)
+    plan = snapshot['plan']
+
+    if snapshot['limit'] is not None and snapshot['limit'] > 0:
+        percent = min(100.0, round(100.0 * snapshot['used'] / snapshot['limit'], 2))
+    else:
+        percent = 0.0
+
+    return ChatUsageQuota(
+        plan=get_plan_display_name(plan),
+        plan_type=plan.value,
+        unit=ChatQuotaUnit(snapshot['unit']),
+        used=round(snapshot['used'], 4),
+        limit=snapshot['limit'],
+        percent=percent,
+        allowed=snapshot['allowed'],
+        reset_at=snapshot['reset_at'],
+    )
+
+
+class PaywallStatusResponse(BaseModel):
+    paywalled: bool
+
+
+@router.get('/v1/users/me/paywall', tags=['users'], response_model=PaywallStatusResponse)
+def get_user_paywall_status(
+    uid: str = Depends(auth.get_current_user_uid),
+    x_app_platform: Optional[str] = Header(None, alias='X-App-Platform'),
+    platform: Optional[str] = Query(None),
+):
+    """Trial-paywall status for the calling user on the given platform.
+
+    Used by the Rust desktop-backend middleware to decide whether to proxy
+    paid LLM / TTS / Pinecone traffic. Mirrors the exact semantics of
+    `is_trial_paywalled`: basic plan + no active BYOK + Firebase Auth
+    account >3d old + platform in {macos, desktop}. Mobile platforms always
+    return `paywalled=false`.
+
+    Platform comes from `X-App-Platform` header (preferred) or `platform`
+    query param (fallback). Unknown / missing platforms are never paywalled.
+    """
+    resolved_platform = x_app_platform or platform
+    return PaywallStatusResponse(paywalled=is_trial_paywalled(uid, resolved_platform))
+
+
+@router.get('/v1/users/me/trial', tags=['users'], response_model=TrialMetadata)
+def get_user_trial_status(uid: str = Depends(auth.get_current_user_uid)):
+    """Structured trial metadata for the calling user.
+
+    Returns trial timing info (start, end, remaining seconds, expired flag)
+    plus the list of features available during trial and the plan the user
+    falls to after trial expiry. Used by desktop clients to render countdown
+    banners and pre-expiry upgrade nudges.
+
+    Paid-plan and BYOK users get `trial_expired=False` with zeroed timing
+    (trial is irrelevant to them — they have full access).
+    """
+    return get_trial_metadata(uid)
 
 
 # **************************************
@@ -875,7 +1438,7 @@ def get_daily_summary_settings(uid: str = Depends(auth.get_current_user_uid)):
     return DailySummarySettingsResponse(enabled=enabled, hour=local_hour)
 
 
-@router.patch('/v1/users/daily-summary-settings', tags=['v1'])
+@router.patch('/v1/users/daily-summary-settings', tags=['v1'], response_model=UserStatusResponse)
 def update_daily_summary_settings(data: DailySummarySettingsUpdate, uid: str = Depends(auth.get_current_user_uid)):
     """
     Update user's daily summary notification settings.
@@ -907,7 +1470,7 @@ class TestDailySummaryRequest(BaseModel):
     date: Optional[str] = None  # YYYY-MM-DD format, defaults to today
 
 
-@router.post('/v1/users/daily-summary-settings/test', tags=['v1'])
+@router.post('/v1/users/daily-summary-settings/test', tags=['v1'], response_model=DailySummaryTestResponse)
 def test_daily_summary(request: TestDailySummaryRequest = None, uid: str = Depends(auth.get_current_user_uid)):
     """
     Test endpoint to manually trigger daily summary for the authenticated user.
@@ -971,14 +1534,16 @@ def test_daily_summary(request: TestDailySummaryRequest = None, uid: str = Depen
             end_date_utc = datetime.combine(display_date, time.max).replace(tzinfo=pytz.utc)
 
     # Get conversations for the date, excluding locked conversations
-    conversations_data = conversations_db.get_conversations(uid, start_date=start_date_utc, end_date=end_date_utc)
+    conversations_data = conversations_db.get_conversations(
+        uid, start_date=start_date_utc, end_date=end_date_utc, date_field='started_at'
+    )
     if conversations_data:
         conversations_data = [c for c in conversations_data if not c.get('is_locked', False)]
 
     if not conversations_data or len(conversations_data) == 0:
         raise HTTPException(status_code=400, detail=f'No conversations found for {date_str}')
 
-    conversations = [Conversation(**convo_data) for convo_data in conversations_data]
+    conversations = deserialize_conversations(conversations_data)
 
     # Generate summary (pass date range for fetching actual action items)
     summary_data = generate_comprehensive_daily_summary(uid, conversations, date_str, start_date_utc, end_date_utc)
@@ -1015,7 +1580,7 @@ def test_daily_summary(request: TestDailySummaryRequest = None, uid: str = Depen
 # Daily Summaries API
 
 
-@router.get('/v1/users/daily-summaries', tags=['v1'])
+@router.get('/v1/users/daily-summaries', tags=['v1'], response_model=DailySummariesResponse)
 def get_daily_summaries(
     limit: int = Query(30, ge=1, le=100), offset: int = Query(0, ge=0), uid: str = Depends(auth.get_current_user_uid)
 ):
@@ -1027,7 +1592,7 @@ def get_daily_summaries(
     return {'summaries': summaries}
 
 
-@router.get('/v1/users/daily-summaries/{summary_id}', tags=['v1'])
+@router.get('/v1/users/daily-summaries/{summary_id}', tags=['v1'], response_model=DailySummaryResponse)
 def get_daily_summary(summary_id: str, uid: str = Depends(auth.get_current_user_uid)):
     """
     Get a single daily summary by ID.
@@ -1038,18 +1603,142 @@ def get_daily_summary(summary_id: str, uid: str = Depends(auth.get_current_user_
     return summary
 
 
-@router.delete('/v1/users/daily-summaries/{summary_id}', tags=['v1'])
+@router.patch('/v1/users/daily-summaries/{summary_id}/visibility', tags=['v1'], response_model=UserStatusResponse)
+def set_daily_summary_visibility(summary_id: str, value: str, uid: str = Depends(auth.get_current_user_uid)):
+    """
+    Set the visibility of a daily summary. Use value='shared' to make it shareable.
+    """
+    if value not in ('shared', 'private'):
+        raise HTTPException(status_code=400, detail="Invalid visibility value. Must be 'shared' or 'private'")
+    summary = daily_summaries_db.get_daily_summary(uid, summary_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail='Daily summary not found')
+    daily_summaries_db.set_daily_summary_visibility(uid, summary_id, value)
+    if value == 'private':
+        remove_daily_summary_to_uid(summary_id)
+    else:
+        store_daily_summary_to_uid(summary_id, uid)
+    return {'status': 'Ok'}
+
+
+@router.delete('/v1/users/daily-summaries/{summary_id}', tags=['v1'], response_model=UserStatusResponse)
 def delete_daily_summary(summary_id: str, uid: str = Depends(auth.get_current_user_uid)):
     """
     Delete a daily summary by ID.
     """
-    # Verify it exists first
     summary = daily_summaries_db.get_daily_summary(uid, summary_id)
     if not summary:
         raise HTTPException(status_code=404, detail='Daily summary not found')
 
     daily_summaries_db.delete_daily_summary(uid, summary_id)
     return {'status': 'ok'}
+
+
+# Cooldown between user-initiated regenerations of the same summary. Cheap
+# guard against double-taps wasting LLM tokens — not a security boundary.
+_REGENERATE_COOLDOWN_SECONDS = 30
+
+
+@router.post('/v1/users/daily-summaries/{summary_id}/regenerate', tags=['v1'], response_model=DailySummaryResponse)
+def regenerate_daily_summary(summary_id: str, uid: str = Depends(auth.get_current_user_uid)):
+    """
+    Re-run summary generation for the date of an existing daily summary and
+    overwrite the same doc in place. No push notification — the user is
+    already looking at the page.
+    """
+    summary = daily_summaries_db.get_daily_summary(uid, summary_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail='Daily summary not found')
+
+    date_str = summary.get('date')
+    if not date_str:
+        raise HTTPException(status_code=400, detail='Daily summary is missing its date')
+    try:
+        target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail='Daily summary has an invalid date')
+
+    cooldown_key = f'daily_summary_regen:{uid}:{summary_id}'
+    if get_generic_cache(cooldown_key):
+        raise HTTPException(
+            status_code=429,
+            detail='Please wait a few seconds before regenerating this recap again.',
+        )
+    # Set the cooldown BEFORE the LLM call, not after. The check-then-set
+    # window was wide enough that two concurrent requests could both pass
+    # the guard and double-bill the LLM. This isn't atomic SETNX, but the
+    # eager set closes the practical race for accidental double-taps.
+    set_generic_cache(cooldown_key, {'at': datetime.utcnow().isoformat()}, ttl=_REGENERATE_COOLDOWN_SECONDS)
+
+    # Resolve the user's local day boundaries the same way the scheduled job
+    # does, so the regenerated payload uses the identical conversation set.
+    time_zone_name = notification_db.get_user_time_zone(uid)
+    if time_zone_name:
+        try:
+            user_tz = pytz.timezone(time_zone_name)
+            start_of_day = user_tz.localize(datetime.combine(target_date, time.min))
+            end_of_day = user_tz.localize(datetime.combine(target_date, time.max))
+            start_date_utc = start_of_day.astimezone(pytz.utc)
+            end_date_utc = end_of_day.astimezone(pytz.utc)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f'Timezone error: {str(e)}')
+    else:
+        start_date_utc = datetime.combine(target_date, time.min).replace(tzinfo=pytz.utc)
+        end_date_utc = datetime.combine(target_date, time.max).replace(tzinfo=pytz.utc)
+
+    conversations_data = conversations_db.get_conversations(
+        uid, start_date=start_date_utc, end_date=end_date_utc, date_field='started_at'
+    )
+    if conversations_data:
+        conversations_data = [c for c in conversations_data if not c.get('is_locked', False)]
+    if not conversations_data:
+        raise HTTPException(status_code=400, detail=f'No conversations found for {date_str}')
+
+    conversations = deserialize_conversations(conversations_data)
+
+    summary_data = generate_comprehensive_daily_summary(uid, conversations, date_str, start_date_utc, end_date_utc)
+    # Preserve fields readers care about that the generator silently resets:
+    # - visibility: sharing state shouldn't toggle off on regenerate
+    # - created_at: generator stamps a fresh utcnow(), but UI sorts/displays
+    #   summaries by when they were first created, not last regenerated
+    if 'visibility' in summary:
+        summary_data['visibility'] = summary['visibility']
+    if 'created_at' in summary:
+        summary_data['created_at'] = summary['created_at']
+    summary_data['regenerated_at'] = datetime.utcnow().isoformat()
+
+    daily_summaries_db.update_daily_summary(uid, summary_id, summary_data)
+
+    refreshed = daily_summaries_db.get_daily_summary(uid, summary_id)
+    return refreshed or {**summary_data, 'id': summary_id}
+
+
+@router.get('/v1/daily-summaries/{summary_id}/shared', tags=['v1'], response_model=DailySummaryResponse)
+def get_shared_daily_summary(summary_id: str):
+    """
+    Public endpoint to retrieve a daily summary for sharing. No auth required.
+    """
+    uid = get_daily_summary_uid(summary_id)
+    if not uid:
+        raise HTTPException(status_code=404, detail='Daily summary not found')
+
+    summary = daily_summaries_db.get_daily_summary(uid, summary_id)
+    if not summary or summary.get('visibility') != 'shared':
+        raise HTTPException(status_code=404, detail='Daily summary not found')
+
+    _PUBLIC_FIELDS = {
+        'id',
+        'date',
+        'headline',
+        'overview',
+        'day_emoji',
+        'stats',
+        'highlights',
+        'action_items',
+        'decisions_made',
+        'knowledge_nuggets',
+    }
+    return {k: v for k, v in summary.items() if k in _PUBLIC_FIELDS}
 
 
 # ***********************************
@@ -1081,7 +1770,7 @@ def get_mentor_notification_settings(uid: str = Depends(auth.get_current_user_ui
     return MentorNotificationSettingsResponse(frequency=frequency)
 
 
-@router.patch('/v1/users/mentor-notification-settings', tags=['v1'])
+@router.patch('/v1/users/mentor-notification-settings', tags=['v1'], response_model=UserStatusResponse)
 def update_mentor_notification_settings(
     data: MentorNotificationSettingsUpdate, uid: str = Depends(auth.get_current_user_uid)
 ):
@@ -1106,7 +1795,29 @@ def update_mentor_notification_settings(
 # LLM Usage Tracking Endpoints
 
 
-@router.get('/v1/users/me/llm-usage', tags=['users'])
+class LlmUsageFeatureResponse(BaseModel):
+    feature: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    call_count: int = 0
+
+
+class LlmUsageResponse(BaseModel):
+    summary: Dict[str, Any] = Field(default_factory=dict)
+    top_features: List[LlmUsageFeatureResponse] = Field(default_factory=list)
+    period_days: int
+
+
+class LlmUsageRecordResponse(BaseModel):
+    status: str
+
+
+class LlmTotalCostResponse(BaseModel):
+    total_cost_usd: float
+
+
+@router.get('/v1/users/me/llm-usage', tags=['users'], response_model=LlmUsageResponse)
 def get_llm_usage(
     days: int = Query(default=30, ge=1, le=365),
     uid: str = Depends(auth.get_current_user_uid),
@@ -1126,7 +1837,7 @@ def get_llm_usage(
     }
 
 
-@router.get('/v1/users/me/llm-usage/top-features', tags=['users'])
+@router.get('/v1/users/me/llm-usage/top-features', tags=['users'], response_model=List[LlmUsageFeatureResponse])
 def get_llm_top_features(
     days: int = Query(default=30, ge=1, le=365),
     limit: int = Query(default=3, ge=1, le=10),
@@ -1140,55 +1851,196 @@ def get_llm_top_features(
     return llm_usage_db.get_top_features(uid, days=days, limit=limit)
 
 
-def _json_default(obj):
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    raise TypeError(f"Type {type(obj)} not serializable")
-
-
-@router.get('/v1/users/export', tags=['v1'])
-async def export_all_user_data(uid: str = Depends(auth.get_current_user_uid)):
+# response_model omitted: this streams a chunked JSON document via StreamingResponse (not a single JSON object);
+# the responses= override documents the streamed shape in OpenAPI without enforcing response_model validation.
+@router.get('/v1/users/export', tags=['v1'], responses={200: {'model': UserDataExportResponse}})
+def export_all_user_data(uid: str = Depends(auth.get_current_user_uid)):
     """Export all user data for GDPR/CCPA compliance. Streams response to avoid timeouts."""
-
-    def generate():
-        profile = get_user_profile(uid)
-        memories_list = memories_db.get_memories(uid, limit=10000, offset=0)
-        people = get_people(uid)
-        action_items = get_standalone_action_items(uid, limit=10000, offset=0)
-
-        # Stream pretty-printed JSON, yielding conversations and messages one at a time
-        yield '{\n'
-        yield '  "profile": ' + json.dumps(profile if profile else {}, default=_json_default, indent=2) + ',\n'
-
-        # Stream conversations via generator (batched internally, never all in memory)
-        # Note: locked conversations are intentionally included in GDPR/CCPA exports per Art. 15
-        yield '  "conversations": [\n'
-        first = True
-        for conv in conversations_db.iter_all_conversations(uid, include_discarded=True):
-            if not first:
-                yield ',\n'
-            first = False
-            yield '    ' + json.dumps(conv, default=_json_default, indent=4)
-        yield '\n  ],\n'
-
-        yield '  "memories": ' + json.dumps(memories_list, default=_json_default, indent=2) + ',\n'
-        yield '  "people": ' + json.dumps(people, default=_json_default, indent=2) + ',\n'
-        yield '  "action_items": ' + json.dumps(action_items, default=_json_default, indent=2) + ',\n'
-
-        # Stream chat messages via generator (batched internally, never all in memory)
-        yield '  "chat_messages": [\n'
-        first = True
-        for msg in chat_db.iter_all_messages(uid):
-            if not first:
-                yield ',\n'
-            first = False
-            yield '    ' + json.dumps(msg, default=_json_default, indent=4)
-        yield '\n  ]\n'
-
-        yield '}\n'
-
     return StreamingResponse(
-        generate(),
+        iter_user_data_export(uid),
         media_type='application/json',
         headers={'Content-Disposition': 'attachment; filename="omi-export.json"'},
     )
+
+
+# ============================================================================
+# Notification Settings
+# ============================================================================
+
+
+class UpdateNotificationSettingsRequest(BaseModel):
+    enabled: bool | None = None
+    frequency: int | None = Field(None, ge=0, le=5)
+
+
+class NotificationSettingsResponse(BaseModel):
+    enabled: bool
+    frequency: int
+
+
+@router.get('/v1/users/notification-settings', tags=['users'], response_model=NotificationSettingsResponse)
+def get_notification_settings(uid: str = Depends(auth.get_current_user_uid)):
+    return users_db.get_notification_settings(uid)
+
+
+@router.patch('/v1/users/notification-settings', tags=['users'], response_model=NotificationSettingsResponse)
+def update_notification_settings(
+    request: UpdateNotificationSettingsRequest,
+    uid: str = Depends(auth.get_current_user_uid),
+):
+    return users_db.update_notification_settings(uid, enabled=request.enabled, frequency=request.frequency)
+
+
+# ============================================================================
+# Assistant Settings
+# ============================================================================
+
+
+class SharedAssistantSettings(BaseModel):
+    cooldown_interval: int | None = None
+    glow_overlay_enabled: bool | None = None
+    analysis_delay: int | None = None
+    screen_analysis_enabled: bool | None = None
+
+
+class FocusAssistantSettings(BaseModel):
+    enabled: bool | None = None
+    analysis_prompt: str | None = Field(None, max_length=10000)
+    cooldown_interval: int | None = None
+    notifications_enabled: bool | None = None
+    excluded_apps: list[str] | None = None
+
+
+class TaskAssistantSettings(BaseModel):
+    enabled: bool | None = None
+    analysis_prompt: str | None = Field(None, max_length=10000)
+    extraction_interval: float | None = None
+    min_confidence: float | None = Field(None, ge=0.0, le=1.0)
+    notifications_enabled: bool | None = None
+    allowed_apps: list[str] | None = None
+    browser_keywords: list[str] | None = None
+
+
+class AdviceAssistantSettings(BaseModel):
+    enabled: bool | None = None
+    analysis_prompt: str | None = Field(None, max_length=10000)
+    extraction_interval: float | None = None
+    min_confidence: float | None = Field(None, ge=0.0, le=1.0)
+    notifications_enabled: bool | None = None
+    excluded_apps: list[str] | None = None
+
+
+class MemoryAssistantSettings(BaseModel):
+    enabled: bool | None = None
+    analysis_prompt: str | None = Field(None, max_length=10000)
+    extraction_interval: float | None = None
+    min_confidence: float | None = Field(None, ge=0.0, le=1.0)
+    notifications_enabled: bool | None = None
+    excluded_apps: list[str] | None = None
+
+
+class FloatingBarSettings(BaseModel):
+    voice_answers_enabled: bool | None = None
+    elevenlabs_voice_id: str | None = Field(None, max_length=200)
+
+
+class UpdateAssistantSettingsRequest(BaseModel):
+    shared: SharedAssistantSettings | None = None
+    focus: FocusAssistantSettings | None = None
+    task: TaskAssistantSettings | None = None
+    advice: AdviceAssistantSettings | None = None
+    memory: MemoryAssistantSettings | None = None
+    floating_bar: FloatingBarSettings | None = None
+    update_channel: str | None = Field(None, max_length=50)
+
+
+class AssistantSettingsResponse(UpdateAssistantSettingsRequest):
+    model_config = ConfigDict(extra='allow')
+
+
+@router.get('/v1/users/assistant-settings', tags=['users'], response_model=AssistantSettingsResponse)
+def get_assistant_settings(uid: str = Depends(auth.get_current_user_uid)):
+    return users_db.get_assistant_settings(uid)
+
+
+@router.patch('/v1/users/assistant-settings', tags=['users'], response_model=AssistantSettingsResponse)
+def update_assistant_settings(
+    request: UpdateAssistantSettingsRequest,
+    uid: str = Depends(auth.get_current_user_uid),
+):
+    settings = request.model_dump(exclude_unset=True)
+    return users_db.update_assistant_settings(uid, settings)
+
+
+# ============================================================================
+# AI User Profile
+# ============================================================================
+
+
+class UpdateAIUserProfileRequest(BaseModel):
+    profile_text: str | None = Field(None, max_length=50000)
+    generated_at: Optional[str] = None
+    data_sources_used: int | None = Field(None, ge=0)
+
+
+class AIUserProfileResponse(BaseModel):
+    profile_text: str | None = None
+    generated_at: Optional[str] = None
+    data_sources_used: int | None = None
+
+
+@router.get('/v1/users/ai-profile', tags=['users'], response_model=AIUserProfileResponse | None)
+def get_ai_profile(uid: str = Depends(auth.get_current_user_uid)):
+    return users_db.get_ai_user_profile(uid)
+
+
+@router.patch('/v1/users/ai-profile', tags=['users'], response_model=AIUserProfileResponse)
+def update_ai_profile(
+    request: UpdateAIUserProfileRequest,
+    uid: str = Depends(auth.get_current_user_uid),
+):
+    return users_db.update_ai_user_profile(
+        uid,
+        profile_text=request.profile_text,
+        generated_at=request.generated_at,
+        data_sources_used=request.data_sources_used,
+    )
+
+
+# ============================================================================
+# Bucket-based LLM Usage (extends existing /v1/users/me/llm-usage endpoints above)
+# ============================================================================
+
+
+class RecordLlmUsageBucketRequest(BaseModel):
+    input_tokens: int = Field(0, ge=0)
+    output_tokens: int = Field(0, ge=0)
+    cache_read_tokens: int = Field(0, ge=0)
+    cache_write_tokens: int = Field(0, ge=0)
+    total_tokens: int = Field(0, ge=0)
+    cost_usd: float = Field(0.0, ge=0.0)
+    account: str = Field('omi', max_length=100)
+
+
+@router.post('/v1/users/me/llm-usage', tags=['users'], response_model=LlmUsageRecordResponse)
+def record_llm_usage_bucket(
+    request: RecordLlmUsageBucketRequest,
+    uid: str = Depends(auth.get_current_user_uid),
+):
+    llm_usage_db.record_llm_usage_bucket(
+        uid,
+        input_tokens=request.input_tokens,
+        output_tokens=request.output_tokens,
+        cache_read_tokens=request.cache_read_tokens,
+        cache_write_tokens=request.cache_write_tokens,
+        total_tokens=request.total_tokens,
+        cost_usd=request.cost_usd,
+        account=request.account,
+    )
+    return {'status': 'ok'}
+
+
+@router.get('/v1/users/me/llm-usage/total', tags=['users'], response_model=LlmTotalCostResponse)
+def get_total_llm_cost(uid: str = Depends(auth.get_current_user_uid)):
+    total = llm_usage_db.get_total_llm_cost(uid)
+    return {'total_cost_usd': total}

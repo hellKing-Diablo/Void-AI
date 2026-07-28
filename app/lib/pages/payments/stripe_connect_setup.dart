@@ -1,3 +1,4 @@
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 
 import 'package:collection/collection.dart';
@@ -8,7 +9,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:omi/gen/assets.gen.dart';
 import 'package:omi/pages/payments/widgets/country_bottom_sheet.dart';
 import 'package:omi/utils/alerts/app_snackbar.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/other/temp.dart';
 import 'package:omi/widgets/animated_loading_button.dart';
 import 'package:omi/widgets/extensions/string.dart';
@@ -46,7 +46,7 @@ class _StripeConnectSetupState extends State<StripeConnectSetup> with SingleTick
     return Consumer<PaymentMethodProvider>(
       builder: (context, provider, child) {
         return PopScope(
-          onPopInvoked: (_) async {
+          onPopInvokedWithResult: (_, __) async {
             provider.stopStripePolling();
           },
           child: Scaffold(
@@ -86,7 +86,11 @@ class _StripeConnectSetupState extends State<StripeConnectSetup> with SingleTick
                                 child: Container(
                                   padding: const EdgeInsets.all(14),
                                   decoration: const BoxDecoration(color: Color(0xFF635BFF), shape: BoxShape.circle),
-                                  child: SvgPicture.asset(Assets.images.stripeLogo, width: 40, color: Colors.white),
+                                  child: SvgPicture.asset(
+                                    Assets.images.stripeLogo,
+                                    width: 40,
+                                    colorFilter: const ColorFilter.mode(Colors.white, BlendMode.srcIn),
+                                  ),
                                 ),
                               ),
                             ],
@@ -117,7 +121,7 @@ class _StripeConnectSetupState extends State<StripeConnectSetup> with SingleTick
                                       const SizedBox(height: 8),
                                       ElevatedButton(
                                         style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.white.withOpacity(0.1),
+                                          backgroundColor: Colors.white.withValues(alpha: 0.1),
                                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                                         ),
@@ -151,12 +155,10 @@ class _StripeConnectSetupState extends State<StripeConnectSetup> with SingleTick
                                                   provider.selectedCountryId?.isEmpty ?? true
                                                       ? context.l10n.selectYourCountry
                                                       : ((provider.filteredCountries.firstWhereOrNull(
-                                                                      (country) =>
-                                                                          country['id'] == provider.selectedCountryId,
-                                                                    )?['name']
-                                                                    as String?)
-                                                                ?.decodeString ??
-                                                            context.l10n.selectYourCountry),
+                                                            (country) => country['id'] == provider.selectedCountryId,
+                                                          )?['name'] as String?)
+                                                              ?.decodeString ??
+                                                          context.l10n.selectYourCountry),
                                                   style: const TextStyle(color: Colors.white),
                                                 ),
                                               ],
@@ -173,7 +175,7 @@ class _StripeConnectSetupState extends State<StripeConnectSetup> with SingleTick
                                 ? Container(
                                     padding: const EdgeInsets.all(12),
                                     decoration: BoxDecoration(
-                                      color: Colors.red.withOpacity(0.1),
+                                      color: Colors.red.withValues(alpha: 0.1),
                                       borderRadius: BorderRadius.circular(8),
                                     ),
                                     child: Row(
@@ -209,29 +211,26 @@ class _StripeConnectSetupState extends State<StripeConnectSetup> with SingleTick
                             AnimatedLoadingButton(
                               text: context.l10n.connectNow,
                               loaderColor: Colors.black,
-                              onPressed:
-                                  provider.stripeConnectionState == PaymentConnectionState.inComplete ||
+                              onPressed: provider.stripeConnectionState == PaymentConnectionState.inComplete ||
                                       provider.selectedCountryId != null
                                   ? () async {
-                                      MixpanelManager().track('Stripe Connect Started');
+                                      PlatformManager.instance.analytics.track('Stripe Connect Started');
                                       var url = await provider.connectStripe();
                                       if (url != null) {
                                         provider.startStripePolling();
                                         await launchUrl(Uri.parse(url));
-                                      } else {
+                                      } else if (context.mounted) {
                                         AppSnackbar.showSnackbarError(context.l10n.errorConnectingToStripe);
                                       }
                                     }
                                   : () async {},
-                              color:
-                                  provider.stripeConnectionState == PaymentConnectionState.inComplete ||
+                              color: provider.stripeConnectionState == PaymentConnectionState.inComplete ||
                                       provider.selectedCountryId != null
                                   ? Colors.white
                                   : Colors.grey,
                               textStyle: TextStyle(
                                 fontSize: 16,
-                                color:
-                                    provider.stripeConnectionState == PaymentConnectionState.inComplete ||
+                                color: provider.stripeConnectionState == PaymentConnectionState.inComplete ||
                                         provider.selectedCountryId != null
                                     ? Colors.black
                                     : Colors.grey[600],
@@ -252,7 +251,7 @@ class _StripeConnectSetupState extends State<StripeConnectSetup> with SingleTick
                                     border: Border.all(color: const Color(0xFF635BFF), width: 3),
                                     boxShadow: [
                                       BoxShadow(
-                                        color: const Color(0xFF635BFF).withOpacity(0.5),
+                                        color: const Color(0xFF635BFF).withValues(alpha: 0.5),
                                         blurRadius: 20 * _pulseController.value,
                                         spreadRadius: 10 * _pulseController.value,
                                       ),
@@ -278,12 +277,12 @@ class _StripeConnectSetupState extends State<StripeConnectSetup> with SingleTick
                             AnimatedLoadingButton(
                               text: context.l10n.failedTryAgain,
                               onPressed: () async {
-                                MixpanelManager().track('Stripe Connect Retry');
+                                PlatformManager.instance.analytics.track('Stripe Connect Retry');
                                 var res = await provider.connectStripe();
                                 if (res != null) {
                                   provider.startStripePolling();
                                   await launchUrl(Uri.parse(res));
-                                } else {
+                                } else if (context.mounted) {
                                   AppSnackbar.showSnackbarError(context.l10n.errorConnectingToStripe);
                                 }
                               },
@@ -294,7 +293,7 @@ class _StripeConnectSetupState extends State<StripeConnectSetup> with SingleTick
                             ),
                             TextButton(
                               onPressed: () {
-                                MixpanelManager().track('Stripe Connect Later');
+                                PlatformManager.instance.analytics.track('Stripe Connect Later');
                                 provider.stopStripePolling();
                                 Navigator.pop(context);
                               },
@@ -308,21 +307,21 @@ class _StripeConnectSetupState extends State<StripeConnectSetup> with SingleTick
                               decoration: BoxDecoration(
                                 gradient: LinearGradient(
                                   colors: [
-                                    const Color(0xFF635BFF).withOpacity(0.15),
-                                    Colors.purple.shade900.withOpacity(0.1),
+                                    const Color(0xFF635BFF).withValues(alpha: 0.15),
+                                    Colors.purple.shade900.withValues(alpha: 0.1),
                                   ],
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
                                 ),
                                 borderRadius: BorderRadius.circular(20),
-                                border: Border.all(color: const Color(0xFF635BFF).withOpacity(0.3), width: 1),
+                                border: Border.all(color: const Color(0xFF635BFF).withValues(alpha: 0.3), width: 1),
                               ),
                               child: Column(
                                 children: [
                                   Container(
                                     padding: const EdgeInsets.all(16),
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFF635BFF).withOpacity(0.1),
+                                      color: const Color(0xFF635BFF).withValues(alpha: 0.1),
                                       shape: BoxShape.circle,
                                     ),
                                     child: const Icon(
@@ -354,12 +353,12 @@ class _StripeConnectSetupState extends State<StripeConnectSetup> with SingleTick
                             AnimatedLoadingButton(
                               text: context.l10n.updateStripeDetails,
                               onPressed: () async {
-                                MixpanelManager().track('Stripe Connect Update');
+                                PlatformManager.instance.analytics.track('Stripe Connect Update');
                                 var url = await provider.connectStripe();
                                 if (url != null) {
                                   provider.startStripePolling();
                                   await launchUrl(Uri.parse(url));
-                                } else {
+                                } else if (context.mounted) {
                                   AppSnackbar.showSnackbarError(context.l10n.errorUpdatingStripeDetails);
                                 }
                               },
@@ -401,7 +400,7 @@ class _StripeConnectSetupState extends State<StripeConnectSetup> with SingleTick
         Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: const Color(0xFF635BFF).withOpacity(0.1),
+            color: const Color(0xFF635BFF).withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(icon, color: const Color(0xFF635BFF), size: 24),

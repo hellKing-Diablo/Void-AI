@@ -4,12 +4,27 @@ on:
   push:
     branches: [ "main" ]
     paths:
-      - 'desktop/Backend-Rust/**'
+      - 'desktop/macos/Backend-Rust/**'
+      - 'backend/scripts/firebase_release_probe_token.py'
+      - 'scripts/voice-provider-probe.sh'
   workflow_dispatch:
+    inputs:
+      skip_provider_probe:
+        description: 'Skip the managed realtime-provider probe during an active upstream outage'
+        required: false
+        default: false
+        type: boolean
 
 env:
   SERVICE: desktop-backend
   REGION: us-central1
+  FIREBASE_AUTH_PROJECT_ID: based-hardware
+  DEFAULT_DESKTOP_BACKEND_BASE_API_URL: https://desktop-backend-dt5lrfkkoa-uc.a.run.app
+
+concurrency:
+  group: desktop-backend-auto-dev
+  # Do not interrupt the Cloud Run mutation or its traffic verification.
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -24,11 +39,11 @@ jobs:
         run: rm -rf /opt/hostedtoolcache
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Google Auth
         id: auth
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS }}
 
@@ -36,33 +51,71 @@ jobs:
         run: gcloud auth configure-docker
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Google Service Account
-        run: echo "${{ secrets.GCP_SERVICE_ACCOUNT }}" | base64 -d > ./desktop/Backend-Rust/google-credentials.json
+        run: echo "${{ secrets.GCP_SERVICE_ACCOUNT }}" | base64 -d > ./desktop/macos/Backend-Rust/google-credentials.json
+
+      - name: Resolve desktop OAuth base API URL
+        id: desktop-base-api-url
+        env:
+          DESKTOP_BACKEND_BASE_API_URL: ${{ vars.DESKTOP_BACKEND_BASE_API_URL }}
+        run: |
+          set -euo pipefail
+          BASE_API_URL="${DESKTOP_BACKEND_BASE_API_URL//[[:space:]]/}"
+          if [ -z "$BASE_API_URL" ]; then
+            BASE_API_URL="$DEFAULT_DESKTOP_BACKEND_BASE_API_URL"
+          fi
+          if [ -z "$BASE_API_URL" ]; then
+            echo "Desktop OAuth BASE_API_URL could not be resolved" >&2
+            exit 1
+          fi
+          echo "base_api_url=$BASE_API_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Validate desktop Calendar API key secret
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          gcloud secrets versions access latest \
+            --project="$PROJECT_ID" \
+            --secret=DESKTOP_GOOGLE_CALENDAR_API_KEY > /tmp/desktop-google-calendar-api-key
+          python3 - <<'PY'
+          from pathlib import Path
+
+          value = Path("/tmp/desktop-google-calendar-api-key").read_bytes()
+          if value.endswith(b"\n"):
+              raise SystemExit("DESKTOP_GOOGLE_CALENDAR_API_KEY must not include a trailing newline")
+          if len(value) != 39 or not value.startswith(b"AIza"):
+              raise SystemExit("DESKTOP_GOOGLE_CALENDAR_API_KEY does not look like a Google API key")
+          PY
 
       - name: Build and Push Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
-          context: ./desktop/Backend-Rust
-          file: ./desktop/Backend-Rust/Dockerfile
+          context: ./desktop/macos/Backend-Rust
+          file: ./desktop/macos/Backend-Rust/Dockerfile
           push: true
           tags: gcr.io/${{ vars.GCP_PROJECT_ID }}/${{ env.SERVICE }}:latest
           cache-from: type=registry,ref=gcr.io/${{ vars.GCP_PROJECT_ID }}/${{ env.SERVICE }}:buildcache
           cache-to: type=registry,ref=gcr.io/${{ vars.GCP_PROJECT_ID }}/${{ env.SERVICE }}:buildcache,mode=max
 
       - name: Deploy desktop-backend to Cloud Run
-        uses: google-github-actions/deploy-cloudrun@v2
+        uses: google-github-actions/deploy-cloudrun@v3
         with:
           service: ${{ env.SERVICE }}
           region: ${{ env.REGION }}
           image: gcr.io/${{ vars.GCP_PROJECT_ID }}/${{ env.SERVICE }}
           flags: '--allow-unauthenticated'
           env_vars: |
-            FIREBASE_PROJECT_ID=based-hardware
+            FIREBASE_PROJECT_ID=${{ env.FIREBASE_AUTH_PROJECT_ID }}
             GOOGLE_APPLICATION_CREDENTIALS=/app/google-credentials.json
+            BASE_API_URL=${{ steps.desktop-base-api-url.outputs.base_api_url }}
+            OMI_DESKTOP_RELEASE_SHA=${{ github.sha }}
+            OMI_DESKTOP_RELEASE_CHANNEL=development
           secrets: |
             GEMINI_API_KEY=GEMINI_API_KEY:latest
+            OPENAI_API_KEY=OPENAI_API_KEY:latest
             ENCRYPTION_SECRET=ENCRYPTION_SECRET:latest
             REDIS_DB_PASSWORD=REDIS_DB_PASSWORD:latest
             FIREBASE_API_KEY=FIREBASE_API_KEY:latest
@@ -70,9 +123,139 @@ jobs:
             REDIS_DB_HOST=REDIS_DB_HOST:latest
             REDIS_DB_PORT=REDIS_DB_PORT:latest
             PINECONE_HOST=PINECONE_HOST:latest
-            DEEPGRAM_API_KEY=DESKTOP_DEEPGRAM_API_KEY:latest
             ANTHROPIC_API_KEY=DESKTOP_ANTHROPIC_API_KEY:latest
+            DESKTOP_LEGACY_ANTHROPIC_KEY=DESKTOP_LEGACY_ANTHROPIC_KEY:latest
             GOOGLE_CALENDAR_API_KEY=DESKTOP_GOOGLE_CALENDAR_API_KEY:latest
+
+      - name: Route traffic to deployed desktop-backend revision
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          REVISION="$(gcloud run services describe "$SERVICE" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --format='value(status.latestCreatedRevisionName)')"
+          if [ -z "$REVISION" ]; then
+            echo "Could not determine latest desktop-backend revision" >&2
+            exit 1
+          fi
+          gcloud run services update-traffic "$SERVICE" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --to-revisions="$REVISION=100" \
+            --quiet
+          TRAFFIC_JSON="$(gcloud run services describe "$SERVICE" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --format=json)"
+          SERVING_REVISION="$(TRAFFIC_JSON="$TRAFFIC_JSON" python3 - <<'PY'
+          import json
+          import os
+
+          service = json.loads(os.environ["TRAFFIC_JSON"])
+          for target in service.get("status", {}).get("traffic", []):
+              if target.get("percent") == 100:
+                  print(target.get("revisionName", ""))
+                  break
+          PY
+          )"
+          if [ "$SERVING_REVISION" != "$REVISION" ]; then
+            echo "desktop-backend traffic is serving $SERVING_REVISION, expected $REVISION" >&2
+            exit 1
+          fi
+
+      - name: Verify development backend release identity
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SERVICE_URL=$(gcloud run services describe "$SERVICE" \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            --format='value(status.url)')
+
+          for attempt in $(seq 1 30); do
+            HEALTH_JSON=$(curl -fsS --max-time 15 "${SERVICE_URL%/}/health" || true)
+            if [ -n "$HEALTH_JSON" ]; then
+              if HEALTH_JSON="$HEALTH_JSON" EXPECTED_SHA="$EXPECTED_SHA" python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          health = json.loads(os.environ["HEALTH_JSON"])
+          expected = {
+              "release_sha": os.environ["EXPECTED_SHA"],
+              "release_channel": "development",
+          }
+          mismatches = {
+              key: {"expected": value, "actual": health.get(key)}
+              for key, value in expected.items()
+              if health.get(key) != value
+          }
+          if mismatches:
+              print(json.dumps({"health": health, "mismatches": mismatches}, indent=2))
+              sys.exit(1)
+          print(json.dumps(health, indent=2))
+          PY
+              then
+                echo "Verified development desktop-backend identity at $SERVICE_URL/health" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+            fi
+            echo "Waiting for development backend identity ($attempt/30)..."
+            sleep 10
+          done
+
+          echo "Development desktop-backend did not report the deployed release identity." >&2
+          exit 1
+
+      - name: Prove managed realtime provider paths
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          SKIP_PROVIDER_PROBE: ${{ github.event.inputs.skip_provider_probe || 'false' }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP_PROVIDER_PROBE" == "true" ]]; then
+            echo "::warning title=Managed realtime provider probe skipped::skip_provider_probe=true was requested during a provider outage."
+            echo "### Managed realtime provider probe skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "Reason: workflow_dispatch input skip_provider_probe=true" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          SERVICE_URL=$(gcloud run services describe "$SERVICE" \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            --format='value(status.url)')
+          if [[ -z "$SERVICE_URL" ]]; then
+            echo "Could not resolve the deployed desktop-backend URL for the provider probe." >&2
+            exit 1
+          fi
+
+          token_file="$(mktemp "$RUNNER_TEMP/omi-voice-provider-probe.XXXXXX")"
+          trap 'rm -f "$token_file"' EXIT
+          python3 backend/scripts/firebase_release_probe_token.py \
+            --secret-project "$PROJECT_ID" \
+            --firebase-project "$FIREBASE_AUTH_PROJECT_ID" \
+            --token-output "$token_file"
+
+          for provider in openai gemini; do
+            for attempt in 1 2 3; do
+              probe_exit=0
+              scripts/voice-provider-probe.sh "$provider" "$SERVICE_URL" \
+                --bearer-token-file "$token_file" || probe_exit=$?
+              if [[ "$probe_exit" -eq 0 ]]; then
+                break
+              fi
+              if [[ "$probe_exit" -ne 75 || "$attempt" -eq 3 ]]; then
+                echo "Managed realtime provider proof failed for $provider." >&2
+                exit "$probe_exit"
+              fi
+              echo "Retrying $provider provider proof after a retryable upstream failure ($attempt/3)."
+              sleep 5
+            done
+          done
 
       - name: Show Output
         run: echo "Desktop backend deployed to development environment"

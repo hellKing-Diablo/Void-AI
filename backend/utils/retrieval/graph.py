@@ -6,33 +6,90 @@ Claude decides implicitly whether to use tools, eliminating the need for
 the requires_context() LLM classification call.
 """
 
+from __future__ import annotations
+
 import uuid
 import asyncio
-from typing import List, Optional, AsyncGenerator, Tuple
+from typing import List, Optional, AsyncGenerator, Tuple, Any, Dict, cast, TYPE_CHECKING
 
-from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
-from langchain_openai import ChatOpenAI
+if TYPE_CHECKING:
+    from models.conversation import Conversation
 
-import database.notifications as notification_db
+from langchain_core.messages import SystemMessage, AIMessage, HumanMessage, BaseMessage
+
 from models.app import App
 from models.chat import ChatSession, Message, PageContext
-from models.conversation import Conversation
 from utils.llm.chat import retrieve_is_file_question
+from utils.llm.clients import get_llm
+from utils.llm.usage_tracker import Features, track_usage
+from utils.executors import db_executor, llm_executor, run_blocking
 from utils.other.chat_file import FileChatTool
-from utils.retrieval.agentic import AsyncStreamingCallback, execute_agentic_chat_stream
+from utils.retrieval.agentic import (
+    AGENT_STREAM_FAILURE_MESSAGE,
+    AGENT_STREAM_FIRST_EVENT_TIMEOUT_SECONDS,
+    AGENT_STREAM_MAX_DURATION_SECONDS,
+    AGENT_STREAM_PROGRESS_HEARTBEAT,
+    AGENT_STREAM_PROGRESS_HEARTBEAT_SECONDS,
+    AGENT_STREAM_TIMEOUT_MESSAGE,
+    AsyncStreamingCallback,
+    cancel_stream_task,
+    execute_agentic_chat_stream,
+    next_stream_chunk,
+)
 from utils.observability.langsmith import get_chat_tracer_callbacks
-from utils.llm.usage_tracker import get_usage_callback
 import logging
 
 logger = logging.getLogger(__name__)
 
-_usage_callback = get_usage_callback()
-llm_medium_stream = ChatOpenAI(
-    model='gpt-4.1',
-    streaming=True,
-    callbacks=[_usage_callback],
-    stream_options={"include_usage": True},
-)
+
+async def _drain_chat_callback(
+    callback: AsyncStreamingCallback, task: asyncio.Task, *, route: str
+) -> AsyncGenerator[str | None, None]:
+    """Drain a callback queue without allowing its producer to strand an SSE response."""
+    started_at = asyncio.get_running_loop().time()
+    received_first_event = False
+    try:
+        while True:
+            remaining_seconds = AGENT_STREAM_MAX_DURATION_SECONDS - (asyncio.get_running_loop().time() - started_at)
+            if remaining_seconds <= 0:
+                raise asyncio.TimeoutError
+
+            wait_timeout = min(
+                (
+                    AGENT_STREAM_FIRST_EVENT_TIMEOUT_SECONDS
+                    if not received_first_event
+                    else AGENT_STREAM_PROGRESS_HEARTBEAT_SECONDS
+                ),
+                remaining_seconds,
+            )
+            try:
+                chunk = await next_stream_chunk(callback, task, wait_timeout)
+            except asyncio.TimeoutError:
+                if received_first_event and remaining_seconds > wait_timeout:
+                    yield f'think: {AGENT_STREAM_PROGRESS_HEARTBEAT}'
+                    continue
+                raise
+
+            if chunk is None:
+                await task
+                return
+
+            received_first_event = True
+            yield chunk
+    except asyncio.TimeoutError:
+        logger.warning('%s chat stream reached its bounded deadline', route)
+        await cancel_stream_task(task)
+        yield f'error: {AGENT_STREAM_TIMEOUT_MESSAGE}'
+    except asyncio.CancelledError:
+        await cancel_stream_task(task)
+        raise
+    except Exception as error:
+        logger.error('%s chat stream failed error_type=%s', route, type(error).__name__)
+        await cancel_stream_task(task)
+        yield f'error: {AGENT_STREAM_FAILURE_MESSAGE}'
+    finally:
+        if not task.done():
+            task.cancel()
 
 
 # ---------------------------------------------------------------------------
@@ -40,14 +97,17 @@ llm_medium_stream = ChatOpenAI(
 # ---------------------------------------------------------------------------
 
 
-def _has_file_context(last_message: Optional[Message], chat_session: Optional[ChatSession]) -> bool:
+async def _has_file_context(last_message: Optional[Message], chat_session: Optional[ChatSession]) -> bool:
     """Check if the request involves file attachments."""
     if last_message and last_message.files_id and len(last_message.files_id) > 0:
         return chat_session is not None
 
     if chat_session and chat_session.file_ids and len(chat_session.file_ids) > 0:
         question = last_message.text if last_message else ""
-        if question and retrieve_is_file_question(question):
+        # retrieve_is_file_question runs a synchronous ~1-2s LLM inference; offload it so it
+        # doesn't block the event loop while execute_chat_stream's async generator is driven
+        # on the loop by StreamingResponse.
+        if question and await run_blocking(llm_executor, retrieve_is_file_question, question):
             return True
 
     return False
@@ -57,17 +117,11 @@ async def _execute_file_chat_stream(
     uid: str,
     messages: List[Message],
     chat_session: ChatSession,
-    callback_data: dict,
-) -> AsyncGenerator[str, None]:
+    callback_data: Optional[Dict[str, Any]] = None,
+) -> AsyncGenerator[Optional[str], None]:
     """Handle file chat with streaming."""
     last_message = messages[-1] if messages else None
     question = last_message.text if last_message else ""
-
-    try:
-        fc_tool = FileChatTool(uid, chat_session.id)
-    except Exception as e:
-        logger.error(f"Failed to create FileChatTool: {e}")
-        raise
 
     # Determine which files to use
     if last_message and last_message.files_id and len(last_message.files_id) > 0:
@@ -80,19 +134,23 @@ async def _execute_file_chat_stream(
     callback = AsyncStreamingCallback()
 
     try:
-        # Run the producer as a concurrent task so chunks stream in real-time
-        async def _produce():
-            return await fc_tool.process_chat_with_file_stream(question, file_ids, callback=callback)
+        # The constructor reads Firestore synchronously, so it belongs inside
+        # the supervised producer as well. That starts the first-event deadline
+        # before any blocking file-chat setup can hold the event loop.
+        async def _produce() -> str:
+            fc_tool = await run_blocking(db_executor, FileChatTool, uid, chat_session.id)
+            return await fc_tool.process_chat_with_file_stream(question, file_ids, callback=cast(Any, callback))
 
         task = asyncio.create_task(_produce())
 
-        # Drain the queue concurrently while the producer runs
-        while True:
-            chunk = await callback.queue.get()
+        async for chunk in _drain_chat_callback(callback, task, route='file'):
+            if chunk and chunk.startswith('error: '):
+                if callback_data is not None:
+                    callback_data['error'] = 'stream_failure'
+                yield chunk
+                return
             if chunk:
                 yield chunk
-            else:
-                break
 
         answer = await task
 
@@ -102,11 +160,11 @@ async def _execute_file_chat_stream(
             callback_data['ask_for_nps'] = True
 
         yield None
-    except Exception as e:
-        logger.error(f"Error in file chat: {e}")
+    except Exception as error:
+        logger.error('file chat stream failed error_type=%s', type(error).__name__)
         if callback_data is not None:
-            callback_data['error'] = str(e)
-        yield None
+            callback_data['error'] = 'stream_failure'
+        yield f'error: {AGENT_STREAM_FAILURE_MESSAGE}'
 
 
 # ---------------------------------------------------------------------------
@@ -119,12 +177,12 @@ async def execute_persona_chat_stream(
     messages: List[Message],
     app: App,
     cited: Optional[bool] = False,
-    callback_data: dict = None,
-    chat_session: Optional[str] = None,
-) -> AsyncGenerator[str, None]:
+    callback_data: Optional[Dict[str, Any]] = None,
+    chat_session: Optional[ChatSession] = None,
+) -> AsyncGenerator[Optional[str], None]:
     """Handle streaming chat responses for persona-type apps."""
     system_prompt = app.persona_prompt
-    formatted_messages = [SystemMessage(content=system_prompt)]
+    formatted_messages: List[BaseMessage] = [SystemMessage(content=system_prompt)]
 
     for msg in messages:
         if msg.sender == "ai":
@@ -132,7 +190,7 @@ async def execute_persona_chat_stream(
         else:
             formatted_messages.append(HumanMessage(content=msg.text))
 
-    full_response = []
+    full_response: List[str] = []
     callback = AsyncStreamingCallback()
 
     # Generate run_id for LangSmith tracing
@@ -150,9 +208,9 @@ async def execute_persona_chat_stream(
         },
     )
 
-    all_callbacks = [callback] + tracer_callbacks
+    all_callbacks: List[Any] = [callback] + tracer_callbacks
 
-    run_metadata = {
+    run_metadata: Dict[str, Any] = {
         "run_id": langsmith_run_id,
         "run_name": "chat.persona.stream",
         "tags": ["chat", "persona", "streaming"],
@@ -168,21 +226,23 @@ async def execute_persona_chat_stream(
         callback_data['langsmith_run_id'] = langsmith_run_id
 
     try:
-        task = asyncio.create_task(
-            llm_medium_stream.agenerate(messages=[formatted_messages], callbacks=all_callbacks, **run_metadata)
-        )
+        with track_usage(uid, Features.CHAT):
+            task = asyncio.create_task(
+                get_llm('chat_graph', streaming=True).agenerate(
+                    messages=[formatted_messages], callbacks=all_callbacks, **run_metadata
+                )
+            )
 
-        while True:
-            try:
-                chunk = await callback.queue.get()
-                if chunk:
-                    token = chunk.replace("data: ", "")
-                    full_response.append(token)
-                    yield chunk
-                else:
-                    break
-            except asyncio.CancelledError:
-                break
+        async for chunk in _drain_chat_callback(callback, task, route='persona'):
+            if chunk and chunk.startswith('error: '):
+                if callback_data is not None:
+                    callback_data['error'] = 'stream_failure'
+                yield chunk
+                return
+            if chunk:
+                if chunk.startswith("data: "):
+                    full_response.append(chunk.removeprefix("data: "))
+                yield chunk
 
         await task
 
@@ -194,11 +254,11 @@ async def execute_persona_chat_stream(
         yield None
         return
 
-    except Exception as e:
-        logger.error(f"Error in execute_persona_chat_stream: {e}")
+    except Exception as error:
+        logger.error('persona chat stream failed error_type=%s', type(error).__name__)
         if callback_data is not None:
-            callback_data['error'] = str(e)
-        yield None
+            callback_data['error'] = 'stream_failure'
+        yield f'error: {AGENT_STREAM_FAILURE_MESSAGE}'
         return
 
 
@@ -212,10 +272,11 @@ async def execute_chat_stream(
     messages: List[Message],
     app: Optional[App] = None,
     cited: Optional[bool] = False,
-    callback_data: dict = {},
+    callback_data: Dict[str, Any] = {},
     chat_session: Optional[ChatSession] = None,
     context: Optional[PageContext] = None,
-) -> AsyncGenerator[str, None]:
+    platform: Optional[str] = None,
+) -> AsyncGenerator[Optional[str], None]:
     """Route chat requests to the appropriate handler.
 
     - Persona apps -> persona chat (LangChain/OpenAI)
@@ -234,7 +295,7 @@ async def execute_chat_stream(
 
     # 2. File attachments
     last_msg = messages[-1] if messages else None
-    if _has_file_context(last_msg, chat_session):
+    if chat_session is not None and await _has_file_context(last_msg, chat_session):
         async for chunk in _execute_file_chat_stream(uid, messages, chat_session, callback_data):
             yield chunk
         return
@@ -242,7 +303,7 @@ async def execute_chat_stream(
     # 3. Default: Anthropic agentic chat
     # Claude decides implicitly whether to use tools — no requires_context() needed
     async for chunk in execute_agentic_chat_stream(
-        uid, messages, app, callback_data=callback_data, chat_session=chat_session, context=context
+        uid, messages, app, callback_data=callback_data, chat_session=chat_session, context=context, platform=platform
     ):
         yield chunk
 
@@ -258,7 +319,7 @@ def execute_graph_chat(
 
     Runs the streaming chat and collects the result.
     """
-    callback_data = {}
+    callback_data: Dict[str, Any] = {}
 
     async def _run():
         async for _ in execute_chat_stream(uid, messages, app, cited=cited, callback_data=callback_data):

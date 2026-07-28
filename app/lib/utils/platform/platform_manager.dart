@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -7,8 +8,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:omi/backend/preferences.dart';
 import 'package:omi/utils/analytics/intercom.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
-import 'package:omi/utils/debugging/crash_reporter.dart';
+import 'package:omi/utils/analytics/analytics_manager.dart';
 import 'package:omi/utils/debugging/crashlytics_manager.dart';
 import 'package:omi/utils/platform/platform_service.dart';
 
@@ -25,21 +25,21 @@ class PlatformManager {
   static PlatformManager get instance => _instance;
 
   // Service instances
-  MixpanelManager get mixpanel => MixpanelManager();
+  AnalyticsManager get analytics => AnalyticsManager();
   IntercomManager get intercom => IntercomManager.instance;
-  CrashReporter get crashReporter => CrashlyticsManager.instance;
+  CrashlyticsManager get crashReporter => CrashlyticsManager.instance;
 
   static Future<void> initializeServices() async {
     _instance._packageInfo = await PackageInfo.fromPlatform();
     _instance._deviceIdHash = await _instance._getDeviceIdHash();
-    await MixpanelManager.init();
+    unawaited(AnalyticsManager.init());
     await IntercomManager.instance.initIntercom();
   }
 
   Future<String> _getDeviceIdHash() async {
     // Check if already stored
-    String? storedHash = SharedPreferencesUtil().deviceIdHash;
-    if (storedHash != null && storedHash.isNotEmpty) {
+    String storedHash = SharedPreferencesUtil().deviceIdHash;
+    if (storedHash.isNotEmpty) {
       return storedHash;
     }
 

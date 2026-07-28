@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -10,7 +11,6 @@ import 'package:pull_down_button/pull_down_button.dart';
 import 'package:omi/widgets/shimmer_with_timeout.dart';
 
 import 'package:omi/backend/http/api/imports.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/utils/logger.dart';
 
@@ -30,7 +30,7 @@ class _ImportHistoryPageState extends State<ImportHistoryPage> {
   @override
   void initState() {
     super.initState();
-    MixpanelManager().importHistoryPageOpened();
+    PlatformManager.instance.analytics.importHistoryPageOpened();
     _loadJobs();
   }
 
@@ -92,7 +92,7 @@ class _ImportHistoryPageState extends State<ImportHistoryPage> {
   Future<void> _startLimitlessImport() async {
     try {
       if (!mounted) return;
-      MixpanelManager().importStarted(source: 'limitless');
+      PlatformManager.instance.analytics.importStarted(source: 'limitless');
       setState(() => _isUploading = true);
 
       // Pick ZIP file
@@ -369,7 +369,7 @@ class _ImportHistoryPageState extends State<ImportHistoryPage> {
                         color: Colors.deepPurple.withValues(alpha: 0.8),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Icon(FontAwesomeIcons.plus, color: Colors.white, size: 16),
+                      child: const FaIcon(FontAwesomeIcons.plus, color: Colors.white, size: 16),
                     )
             else
               Icon(Icons.lock_outline, color: Colors.grey.shade700, size: 20),
@@ -418,28 +418,28 @@ class _ImportHistoryPageState extends State<ImportHistoryPage> {
   }
 
   Widget _buildJobCard(ImportJobResponse job) {
-    IconData statusIcon;
+    FaIconData statusIcon;
     Color statusColor;
     String statusText;
 
     switch (job.status) {
       case ImportJobStatus.pending:
-        statusIcon = Icons.hourglass_empty;
+        statusIcon = FontAwesomeIcons.hourglass;
         statusColor = Colors.orange;
         statusText = context.l10n.statusPending;
         break;
       case ImportJobStatus.processing:
-        statusIcon = Icons.sync;
+        statusIcon = FontAwesomeIcons.arrowsRotate;
         statusColor = Colors.blue;
         statusText = context.l10n.statusProcessing;
         break;
       case ImportJobStatus.completed:
-        statusIcon = Icons.done;
+        statusIcon = FontAwesomeIcons.check;
         statusColor = Colors.green;
         statusText = context.l10n.statusCompleted;
         break;
       case ImportJobStatus.failed:
-        statusIcon = Icons.error;
+        statusIcon = FontAwesomeIcons.circleExclamation;
         statusColor = Colors.red;
         statusText = context.l10n.statusFailed;
         break;
@@ -490,7 +490,7 @@ class _ImportHistoryPageState extends State<ImportHistoryPage> {
               if (job.isProcessing)
                 _RotatingSyncIcon(color: statusColor, size: 18)
               else if (job.status != ImportJobStatus.completed)
-                Icon(statusIcon, color: statusColor, size: 18),
+                FaIcon(statusIcon, color: statusColor, size: 18),
               if (job.status != ImportJobStatus.completed) const SizedBox(width: 6),
               // Status text and date
               Expanded(
@@ -743,9 +743,8 @@ class _ImportHistoryPageState extends State<ImportHistoryPage> {
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(color: Colors.grey.withValues(alpha: 0.3), shape: BoxShape.circle),
-                  child: const Center(
-                    child: FaIcon(FontAwesomeIcons.ellipsisVertical, size: 16.0, color: Colors.white),
-                  ),
+                  child:
+                      const Center(child: FaIcon(FontAwesomeIcons.ellipsisVertical, size: 16.0, color: Colors.white)),
                 ),
               ),
             ),

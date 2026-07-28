@@ -1,4 +1,4 @@
-import { Plugin, PluginStat } from '../components/types';
+import { Plugin } from '../components/types';
 import { headers } from 'next/headers';
 import { CompactPluginCard } from '../components/plugin-card/compact';
 import { CategoryBreadcrumb } from '../components/category-breadcrumb';
@@ -11,10 +11,11 @@ import { getAppById, getAppsByCategory } from '@/src/lib/api/apps';
 import envConfig from '@/src/constants/envConfig';
 
 type Props = {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 };
 
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
+export async function generateMetadata(props: Props): Promise<Metadata> {
+  const params = await props.params;
   const plugin = await getAppById(params.id);
 
   if (!plugin) {
@@ -114,7 +115,7 @@ export function generateStructuredData(plugin: Plugin, categoryName: string) {
         },
         offers: {
           '@type': 'Offer',
-          price: '69.99',
+          price: '89',
           priceCurrency: 'USD',
           availability: 'https://schema.org/InStock',
           url: productUrl,
@@ -168,19 +169,17 @@ function formatDate(dateString: string): string {
   });
 }
 
-export default async function PluginDetailView({ params }: { params: { id: string } }) {
+export default async function PluginDetailView(props: {
+  params: Promise<{ id: string }>;
+}) {
+  const params = await props.params;
   const plugin = await getAppById(params.id);
 
   if (!plugin) {
     throw new Error('App not found');
   }
 
-  const statsResponse = await fetch(
-    'https://raw.githubusercontent.com/BasedHardware/omi/refs/heads/main/community-plugin-stats.json',
-  );
-  const stats = (await statsResponse.json()) as PluginStat[];
-
-  const userAgent = headers().get('user-agent') || '';
+  const userAgent = (await headers()).get('user-agent') || '';
   const link = getPlatformLink(userAgent);
 
   // Get related apps based on category
@@ -214,7 +213,7 @@ export default async function PluginDetailView({ params }: { params: { id: strin
             <div className="lg:col-span-2">
               <div className="relative aspect-square overflow-hidden rounded-[1rem] bg-[#1A1F2E]">
                 <Image
-                  src={plugin.image}
+                  src={plugin.image || '/logo.webp'}
                   alt={plugin.name}
                   className="h-full w-full object-cover transition-transform duration-300 hover:scale-105"
                   width={500}
@@ -347,7 +346,7 @@ export default async function PluginDetailView({ params }: { params: { id: strin
                   <div className="text-sm font-medium text-gray-400">Capabilities</div>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2 pl-7">
-                  {Array.from(plugin.capabilities).map((cap) => (
+                  {Array.from(plugin.capabilities ?? []).map((cap) => (
                     <span
                       key={cap}
                       className="rounded-full bg-[#1A1F2E] px-3 py-1 text-sm text-white"
@@ -367,12 +366,7 @@ export default async function PluginDetailView({ params }: { params: { id: strin
             </h2>
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
               {relatedApps.map((app, index) => (
-                <CompactPluginCard
-                  key={app.id}
-                  plugin={app}
-                  stat={stats.find((s) => s.id === app.id)}
-                  index={index + 1}
-                />
+                <CompactPluginCard key={app.id} plugin={app} index={index + 1} />
               ))}
             </div>
           </section>

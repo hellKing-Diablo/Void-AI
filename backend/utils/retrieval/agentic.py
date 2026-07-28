@@ -12,20 +12,19 @@ import os
 import uuid
 import asyncio
 import contextvars
-import traceback
+import os
 from typing import List, Optional, AsyncGenerator, Any, Tuple
 
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.prebuilt import create_react_agent
+from langchain_core.callbacks import BaseCallbackHandler
 
 # Context variable to store config for tools
 agent_config_context: contextvars.ContextVar[dict] = contextvars.ContextVar('agent_config', default=None)
 
 from models.app import App
 from models.chat import Message, ChatSession, PageContext
-from models.conversation import Conversation
 from utils.retrieval.tools import (
     get_conversations_tool,
     search_conversations_tool,
@@ -35,7 +34,6 @@ from utils.retrieval.tools import (
     create_action_item_tool,
     update_action_item_tool,
     get_omi_product_info_tool,
-    perplexity_web_search_tool,
     get_calendar_events_tool,
     create_calendar_event_tool,
     update_calendar_event_tool,
@@ -52,12 +50,16 @@ from utils.retrieval.tools import (
     get_screen_activity_tool,
     search_screen_activity_tool,
     save_user_preference_tool,
+    fetch_url_tool,
+    traverse_knowledge_graph_tool,
 )
 from utils.retrieval.tools.app_tools import load_app_tools, get_tool_status_message
+from utils.retrieval.tool_result_boundaries import preserve_chat_memory_tool_result_boundary
 from utils.retrieval.safety import AgentSafetyGuard, SafetyGuardError
-from utils.llm.clients import llm_agent, llm_agent_stream, anthropic_client, ANTHROPIC_AGENT_MODEL
-from utils.llm.chat import _get_agentic_qa_prompt
-from utils.observability.langsmith import get_chat_tracer_callbacks
+from utils.llm.byok_errors import handle_llm_error_async
+from utils.llm.clients import anthropic_client, ANTHROPIC_AGENT_MODEL
+from utils.llm.chat import _get_agentic_qa_prompt, get_current_datetime_block, get_user_timezone
+from utils.executors import run_blocking, db_executor
 from utils.other.endpoints import timeit
 import logging
 
@@ -73,21 +75,34 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Provider switch — change this one env var to flip backends
-# ---------------------------------------------------------------------------
-# CHAT_PROVIDER=openai    → LangGraph + OpenAI GPT  (default, no Anthropic key needed)
-# CHAT_PROVIDER=anthropic → Anthropic Claude native API
-CHAT_PROVIDER = os.getenv('CHAT_PROVIDER', 'openai').lower()
-logger.info(f"Chat provider: {CHAT_PROVIDER}")
 
-# ---------------------------------------------------------------------------
-# Shared tool list — used by both providers
-# ---------------------------------------------------------------------------
-# IMPORTANT: Keep this list fixed and in this exact order.
-# Both OpenAI and Anthropic cache the tool definitions as part of the request
-# prefix — changing the order breaks the cache and costs more tokens.
-# Dynamic per-user app tools are appended AFTER this list.
+def _positive_timeout_from_env(name: str, default: float) -> float:
+    """Read a positive stream deadline at import time so invalid deploy config fails fast."""
+    raw_value = os.environ.get(name, str(default))
+    try:
+        timeout = float(raw_value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f'{name} must be a number') from error
+    if timeout <= 0:
+        raise ValueError(f'{name} must be greater than zero')
+    return timeout
+
+
+# The first event must arrive before the client/proxy deadline. Afterwards a
+# heartbeat keeps a known-long tool call observable while the total deadline
+# still prevents an agent task from running without bound.
+AGENT_STREAM_FIRST_EVENT_TIMEOUT_SECONDS = _positive_timeout_from_env('AGENT_STREAM_FIRST_EVENT_TIMEOUT_SECONDS', 25.0)
+AGENT_STREAM_PROGRESS_HEARTBEAT_SECONDS = _positive_timeout_from_env('AGENT_STREAM_PROGRESS_HEARTBEAT_SECONDS', 20.0)
+AGENT_STREAM_MAX_DURATION_SECONDS = _positive_timeout_from_env('AGENT_STREAM_MAX_DURATION_SECONDS', 150.0)
+AGENT_STREAM_CANCEL_GRACE_SECONDS = _positive_timeout_from_env('AGENT_STREAM_CANCEL_GRACE_SECONDS', 2.0)
+AGENT_STREAM_PROGRESS_HEARTBEAT = 'Still working…'
+AGENT_STREAM_TIMEOUT_MESSAGE = 'The response took too long. Please try again.'
+AGENT_STREAM_FAILURE_MESSAGE = 'Unable to complete the response. Please try again.'
+
+# PROMPT CACHE OPTIMIZATION: This list MUST stay fixed and in this exact order.
+# Anthropic caches the tools array as part of the request prefix.  If the tool
+# definitions are identical across requests they are cached automatically.
+# Dynamic per-user app tools are appended AFTER this list so the prefix stays stable.
 CORE_TOOLS = [
     get_conversations_tool,
     search_conversations_tool,
@@ -97,7 +112,6 @@ CORE_TOOLS = [
     create_action_item_tool,
     update_action_item_tool,
     get_omi_product_info_tool,
-    perplexity_web_search_tool,
     get_calendar_events_tool,
     create_calendar_event_tool,
     update_calendar_event_tool,
@@ -114,6 +128,8 @@ CORE_TOOLS = [
     get_screen_activity_tool,
     search_screen_activity_tool,
     save_user_preference_tool,
+    fetch_url_tool,
+    traverse_knowledge_graph_tool,
 ]
 
 # Standard tool names (used to detect app tools by exclusion)
@@ -139,11 +155,12 @@ def get_tool_display_name(tool_name: str, tool_obj: Optional[Any] = None) -> str
         'update_calendar_event_tool': 'Updating calendar event',
         'delete_calendar_event_tool': 'Deleting calendar event',
         'get_gmail_messages_tool': 'Checking Gmail',
-        'perplexity_web_search_tool': 'Searching the web',
+        'web_search': 'Searching the web',
         'get_conversations_tool': 'Searching conversations',
         'search_conversations_tool': 'Searching conversations',
         'get_memories_tool': 'Searching memories',
         'search_memories_tool': 'Searching memories',
+        'traverse_knowledge_graph_tool': 'Traversing knowledge graph',
         'get_action_items_tool': 'Checking action items',
         'create_action_item_tool': 'Creating action item',
         'update_action_item_tool': 'Updating action item',
@@ -153,6 +170,7 @@ def get_tool_display_name(tool_name: str, tool_obj: Optional[Any] = None) -> str
         'get_screen_activity_tool': 'Checking screen activity',
         'search_screen_activity_tool': 'Searching screen activity',
         'save_user_preference_tool': 'Saving preference',
+        'fetch_url_tool': 'Reading page',
     }
 
     if tool_name in tool_display_map:
@@ -160,7 +178,7 @@ def get_tool_display_name(tool_name: str, tool_obj: Optional[Any] = None) -> str
 
     if 'calendar' in tool_name.lower():
         return 'Checking calendar'
-    elif 'perplexity' in tool_name.lower() or 'search' in tool_name.lower():
+    elif 'web_search' in tool_name.lower():
         return 'Searching the web'
     elif 'memory' in tool_name.lower():
         return 'Searching memories'
@@ -218,11 +236,26 @@ async def _emit_calendar_status(callback, tool_name: str, output: str):
 # Streaming callback — base class (plain queue, used by Anthropic path)
 # ---------------------------------------------------------------------------
 
-class AsyncStreamingCallback:
-    """Queue-based callback for streaming responses with data/think prefixes."""
+class AsyncStreamingCallback(BaseCallbackHandler):
+    """Callback for streaming LLM responses with data and thought prefixes."""
 
     def __init__(self):
         self.queue = asyncio.Queue()
+        # Sync providers can invoke the nowait methods from an executor worker.
+        # asyncio.Queue is bound to this request loop, so its mutation must always
+        # be marshalled back to that loop instead of happening from the worker.
+        self._loop = asyncio.get_running_loop()
+
+    def _put_nowait_threadsafe(self, value: str | None) -> None:
+        """Queue a synchronous callback value on the loop that owns the response."""
+        if self._loop.is_closed():
+            return
+        try:
+            self._loop.call_soon_threadsafe(self.queue.put_nowait, value)
+        except RuntimeError:
+            # The request loop can close after a bounded stream is cancelled while
+            # a non-cooperative sync provider is still unwinding in its worker.
+            return
 
     async def put_data(self, text):
         await self.queue.put(f"data: {text}")
@@ -235,342 +268,36 @@ class AsyncStreamingCallback:
 
     def put_thought_nowait(self, text, app_id: Optional[str] = None):
         if app_id:
-            self.queue.put_nowait(f"think: {text}|app_id:{app_id}")
+            self._put_nowait_threadsafe(f"think: {text}|app_id:{app_id}")
         else:
-            self.queue.put_nowait(f"think: {text}")
+            self._put_nowait_threadsafe(f"think: {text}")
 
     def put_data_nowait(self, text):
-        self.queue.put_nowait(f"data: {text}")
+        self._put_nowait_threadsafe(f"data: {text}")
 
     async def end(self):
         await self.queue.put(None)
 
     def end_nowait(self):
-        self.queue.put_nowait(None)
+        self._put_nowait_threadsafe(None)
 
-
-# ---------------------------------------------------------------------------
-# OpenAI streaming callback — extends base with LangChain hooks
-# ---------------------------------------------------------------------------
-
-class _OpenAIStreamingCallback(BaseCallbackHandler, AsyncStreamingCallback):
-    """LangChain callback handler that feeds tokens into the async queue."""
-
-    def __init__(self):
-        BaseCallbackHandler.__init__(self)
-        AsyncStreamingCallback.__init__(self)
-
-    async def on_llm_new_token(self, token: str, **kwargs) -> None:
+    async def on_llm_new_token(self, token: str, **_kwargs) -> None:
+        """Bridge LangChain streaming callbacks for persona chat."""
         await self.put_data(token)
 
-    async def on_llm_end(self, response, **kwargs) -> None:
+    async def on_llm_end(self, _response, **_kwargs) -> None:
+        """Always terminate the persona callback queue on normal completion."""
         await self.end()
 
-    async def on_llm_error(self, error: Exception, **kwargs) -> None:
-        logger.error(f"LLM error: {error}")
+    async def on_llm_error(self, _error: Exception, **_kwargs) -> None:
+        """Terminate the persona callback queue without exposing provider details."""
         await self.end()
 
 
 # ---------------------------------------------------------------------------
-# OpenAI / LangGraph implementation
+# Tool schema conversion: LangChain @tool -> Anthropic tool format
 # ---------------------------------------------------------------------------
 
-def _messages_to_langchain(messages: List[Message]) -> List:
-    """Convert chat messages to LangChain format."""
-    result = []
-    for msg in messages:
-        if msg.sender == 'ai':
-            result.append(AIMessage(content=msg.text))
-        else:
-            result.append(HumanMessage(content=msg.text))
-    return result
-
-
-@timeit
-def execute_agentic_chat(
-    uid: str,
-    messages: List[Message],
-    app: Optional[App] = None,
-) -> Tuple[str, bool, List[Conversation]]:
-    """Execute a non-streaming agentic chat (OpenAI path only)."""
-    system_prompt = _get_agentic_qa_prompt(uid, app)
-
-    prompt_name, prompt_commit, prompt_source = None, None, None
-    try:
-        from utils.observability.langsmith_prompts import get_prompt_metadata
-        prompt_name, prompt_commit, prompt_source = get_prompt_metadata()
-    except Exception as e:
-        logger.error(f"Could not get prompt metadata: {e}")
-
-    tools = list(CORE_TOOLS)
-    try:
-        app_tools = load_app_tools(uid)
-        tools.extend(app_tools)
-        if app_tools:
-            logger.info(f"Added {len(app_tools)} app tools to chat")
-    except Exception as e:
-        logger.error(f"Error loading app tools: {e}")
-
-    lc_messages = [SystemMessage(content=system_prompt)]
-    lc_messages.extend(_messages_to_langchain(messages))
-
-    agent = create_react_agent(model=llm_agent, tools=tools)
-
-    tracer_callbacks = get_chat_tracer_callbacks(
-        run_name="chat.agentic",
-        tags=["chat", "agentic"],
-        metadata={
-            "uid": uid,
-            "app_id": app.id if app else None,
-            "app_name": app.name if app else None,
-            "prompt_name": prompt_name,
-            "prompt_commit": prompt_commit,
-            "prompt_source": prompt_source,
-        },
-    )
-
-    config = {
-        "configurable": {"user_id": uid, "thread_id": str(uuid.uuid4())},
-        "callbacks": tracer_callbacks,
-        "run_name": "chat.agentic",
-        "tags": ["chat", "agentic"],
-        "metadata": {
-            "uid": uid,
-            "app_id": app.id if app else None,
-            "app_name": app.name if app else None,
-            "prompt_name": prompt_name,
-            "prompt_commit": prompt_commit,
-            "prompt_source": prompt_source,
-        },
-    }
-
-    agent_config_context.set(config)
-    result = agent.invoke({"messages": lc_messages}, config=config)
-
-    answer = result["messages"][-1].content if result.get("messages") else "I'm sorry, I couldn't generate a response."
-    ask_for_nps = len(result.get("messages", [])) > len(lc_messages) + 1
-    return answer, ask_for_nps, []
-
-
-async def _run_openai_agent_stream(
-    agent,
-    messages: List,
-    config: dict,
-    callback: _OpenAIStreamingCallback,
-    full_response: List[str],
-):
-    """Run the LangGraph ReAct agent and feed events into the callback queue."""
-    safety_guard = config['configurable'].get('safety_guard')
-
-    try:
-        async for event in agent.astream_events({"messages": messages}, config=config, version="v2"):
-            kind = event.get("event")
-
-            if kind == "on_chat_model_stream":
-                chunk = event.get("data", {}).get("chunk")
-                if chunk and hasattr(chunk, "content") and chunk.content:
-                    token = chunk.content
-                    full_response.append(token)
-                    await callback.put_data(token)
-
-            elif kind == "on_tool_start":
-                tool_name = event.get("name", "unknown")
-                tool_input = event.get("data", {}).get("input", {})
-                logger.info(f"Tool started: {tool_name}")
-
-                app_id = _extract_app_id(tool_name)
-                tools_list = config.get('configurable', {}).get('tools', [])
-                tool_obj = next((t for t in tools_list if hasattr(t, 'name') and t.name == tool_name), None)
-                await callback.put_thought(get_tool_display_name(tool_name, tool_obj), app_id=app_id)
-
-                if safety_guard:
-                    try:
-                        safety_guard.validate_tool_call(tool_name, tool_input)
-                        warning = safety_guard.should_warn_user()
-                        if warning:
-                            await callback.put_thought(warning)
-                    except SafetyGuardError as e:
-                        await callback.put_data(f"\n\n{str(e)}")
-                        logger.error(f"Safety Guard blocked tool call: {e}")
-                        await callback.end()
-                        return
-
-            elif kind == "on_tool_end":
-                tool_name = event.get("name", "unknown")
-                output_raw = event.get("data", {}).get("output", "")
-                if hasattr(output_raw, 'content'):
-                    output = str(output_raw.content)
-                elif isinstance(output_raw, str):
-                    output = output_raw
-                else:
-                    output = str(output_raw)
-
-                logger.info(f"Tool ended: {tool_name}")
-                await _emit_calendar_status(callback, tool_name, output)
-
-                if safety_guard and output:
-                    try:
-                        safety_guard.check_context_size(output)
-                    except SafetyGuardError as e:
-                        await callback.put_data(f"\n\n{str(e)}")
-                        logger.error(f"Safety Guard blocked due to context size: {e}")
-                        await callback.end()
-                        return
-
-            elif kind == "on_tool_error":
-                logger.error(f"Tool error: {event.get('name', 'unknown')} — {event.get('data', {}).get('error', '')}")
-
-            elif kind == "on_chain_error":
-                logger.error(f"Chain error: {event.get('data', {}).get('error', '')}")
-
-        if safety_guard:
-            logger.info(f"Safety Guard final stats: {safety_guard.get_stats()}")
-
-        await callback.end()
-
-    except SafetyGuardError as e:
-        await callback.put_data(f"\n\n{str(e)}")
-        logger.error(f"Safety Guard stopped execution: {e}")
-        await callback.end()
-    except Exception as e:
-        logger.error(f"Error in _run_openai_agent_stream: {e}")
-        traceback.print_exc()
-        await callback.end()
-
-
-async def _execute_agentic_chat_stream_openai(
-    uid: str,
-    messages: List[Message],
-    app: Optional[App],
-    callback_data: dict,
-    chat_session: Optional[ChatSession],
-    context: Optional[PageContext],
-) -> AsyncGenerator[str, None]:
-    """OpenAI/LangGraph streaming implementation."""
-    system_prompt = _get_agentic_qa_prompt(uid, app, messages, context=context)
-
-    prompt_name, prompt_commit, prompt_source = None, None, None
-    try:
-        from utils.observability.langsmith_prompts import get_prompt_metadata
-        prompt_name, prompt_commit, prompt_source = get_prompt_metadata()
-    except Exception as e:
-        logger.error(f"Could not get prompt metadata: {e}")
-
-    tools = list(CORE_TOOLS)
-    try:
-        app_tools = load_app_tools(uid)
-        tools.extend(app_tools)
-        if app_tools:
-            logger.info(f"Added {len(app_tools)} app tools to chat")
-    except Exception as e:
-        logger.error(f"Error loading app tools: {e}")
-
-    lc_messages = [SystemMessage(content=system_prompt)]
-    lc_messages.extend(_messages_to_langchain(messages))
-
-    callback = _OpenAIStreamingCallback()
-    agent = create_react_agent(model=llm_agent_stream, tools=tools)
-
-    conversations_collected = []
-    safety_guard = AgentSafetyGuard(max_tool_calls=25, max_context_tokens=500000)
-    langsmith_run_id = str(uuid.uuid4())
-
-    tracer_callbacks = get_chat_tracer_callbacks(
-        run_id=langsmith_run_id,
-        run_name="chat.agentic.stream",
-        tags=["chat", "agentic", "streaming"],
-        metadata={
-            "uid": uid,
-            "app_id": app.id if app else None,
-            "app_name": app.name if app else None,
-            "chat_session_id": chat_session.id if chat_session else None,
-            "has_context": context is not None,
-            "context_type": context.type if context else None,
-            "num_tools": len(tools),
-            "prompt_name": prompt_name,
-            "prompt_commit": prompt_commit,
-            "prompt_source": prompt_source,
-            "provider": "openai",
-        },
-    )
-
-    config = {
-        "run_id": langsmith_run_id,
-        "configurable": {
-            "user_id": uid,
-            "thread_id": str(uuid.uuid4()),
-            "conversations_collected": conversations_collected,
-            "safety_guard": safety_guard,
-            "chat_session_id": chat_session.id if chat_session else None,
-            "tools": tools,
-        },
-        "callbacks": tracer_callbacks,
-        "run_name": "chat.agentic.stream",
-        "tags": ["chat", "agentic", "streaming"],
-        "metadata": {
-            "uid": uid,
-            "app_id": app.id if app else None,
-            "app_name": app.name if app else None,
-            "chat_session_id": chat_session.id if chat_session else None,
-            "has_context": context is not None,
-            "context_type": context.type if context else None,
-            "num_tools": len(tools),
-            "prompt_name": prompt_name,
-            "prompt_commit": prompt_commit,
-            "prompt_source": prompt_source,
-            "provider": "openai",
-        },
-    }
-
-    agent_config_context.set(config)
-
-    if callback_data is not None:
-        callback_data['langsmith_run_id'] = langsmith_run_id
-        callback_data['prompt_name'] = prompt_name
-        callback_data['prompt_commit'] = prompt_commit
-
-    full_response = []
-    tool_usage_count = 0
-
-    task = asyncio.create_task(
-        _run_openai_agent_stream(agent, lc_messages, config, callback, full_response)
-    )
-
-    try:
-        while True:
-            chunk = await callback.queue.get()
-            if chunk is None:
-                break
-            if chunk.startswith("think: "):
-                tool_usage_count += 1
-            yield chunk
-
-        await task
-
-        if callback_data is not None:
-            callback_data['answer'] = ''.join(full_response)
-            callback_data['memories_found'] = conversations_collected if conversations_collected else []
-            callback_data['ask_for_nps'] = tool_usage_count > 0
-            chart_data = config.get('configurable', {}).get('chart_data')
-            if chart_data:
-                callback_data['chart_data'] = chart_data
-            logger.info(f"Collected {len(callback_data['memories_found'])} conversations for citation")
-
-    except asyncio.CancelledError:
-        task.cancel()
-        raise
-    except Exception as e:
-        logger.error(f"Error in OpenAI stream: {e}")
-        traceback.print_exc()
-        if callback_data is not None:
-            callback_data['error'] = str(e)
-
-    yield None
-
-
-# ---------------------------------------------------------------------------
-# Anthropic implementation
-# ---------------------------------------------------------------------------
 
 def _langchain_tool_to_anthropic(lc_tool, defer_loading: bool = False) -> dict:
     """Convert a LangChain @tool to Anthropic tool schema format."""
@@ -601,6 +328,20 @@ TOOL_SEARCH_TOOL = {
     "name": "tool_search_tool_regex",
 }
 
+# Web search tool — Anthropic's built-in server-side web search (replaces Perplexity)
+WEB_SEARCH_TOOL = {
+    "type": "web_search_20260209",
+    "name": "web_search",
+    "max_uses": 5,
+}
+
+# Web search tool — Anthropic's built-in server-side web search (replaces Perplexity)
+WEB_SEARCH_TOOL = {
+    "type": "web_search_20260209",
+    "name": "web_search",
+    "max_uses": 5,
+}
+
 
 def _convert_tools_anthropic(core_tools: list, app_tools: list = None) -> tuple:
     """Convert tools to Anthropic schema format and build execution registry.
@@ -610,6 +351,10 @@ def _convert_tools_anthropic(core_tools: list, app_tools: list = None) -> tuple:
     """
     schemas = []
 
+    # Add built-in server tools
+    schemas.append(WEB_SEARCH_TOOL)
+
+    # Add tool search tool if there are app tools to discover
     if app_tools:
         schemas.append(TOOL_SEARCH_TOOL)
 
@@ -637,7 +382,105 @@ async def _execute_tool_anthropic(tool_name: str, tool_input: dict, registry: di
     tool_obj = registry[tool_name]
     config = RunnableConfig(configurable=configurable)
     result = await tool_obj.ainvoke(tool_input, config=config)
-    return str(result)
+    result = preserve_chat_memory_tool_result_boundary(tool_name, str(result))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# App ID extraction for non-standard tools
+# ---------------------------------------------------------------------------
+
+
+def _extract_app_id(tool_name: str) -> Optional[str]:
+    """Extract app_id from an app tool name (format: appid_toolname)."""
+    if tool_name not in STANDARD_TOOL_NAMES and '_' in tool_name:
+        parts = tool_name.split('_', 1)
+        if len(parts) == 2:
+            return parts[0]
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Calendar tool status messages
+# ---------------------------------------------------------------------------
+
+
+async def _emit_calendar_status(callback: AsyncStreamingCallback, tool_name: str, output: str):
+    """Emit calendar-specific completion status messages."""
+    if 'calendar' not in tool_name.lower():
+        return
+
+    if 'create' in tool_name.lower():
+        if output and ('Successfully created' in output or '✅' in output):
+            await callback.put_thought('Event created successfully')
+        elif output and ('Error' in output or 'error' in output.lower()):
+            await callback.put_thought('Failed to create event')
+        else:
+            await callback.put_thought('Creating event...')
+    elif 'update' in tool_name.lower():
+        if output and ('Successfully updated' in output or '✅' in output):
+            await callback.put_thought('Event updated successfully')
+        elif output and ('Error' in output or 'error' in output.lower()):
+            await callback.put_thought('Failed to update event')
+        else:
+            await callback.put_thought('Updating event...')
+    elif 'delete' in tool_name.lower():
+        if output and ('Successfully deleted' in output or '✅' in output):
+            await callback.put_thought('Event deleted successfully')
+        elif output and ('Error' in output or 'error' in output.lower()):
+            await callback.put_thought('Failed to delete event')
+        else:
+            await callback.put_thought('Deleting event...')
+    elif 'get' in tool_name.lower() or 'search' in tool_name.lower():
+        if output and len(output) > 0:
+            await callback.put_thought('Found calendar events')
+        else:
+            await callback.put_thought('No events found')
+
+
+# ---------------------------------------------------------------------------
+# Message format conversion
+# ---------------------------------------------------------------------------
+
+
+def _messages_to_anthropic(messages: List[Message]) -> list:
+    """Convert chat messages to Anthropic API format."""
+    anthropic_messages = []
+    for msg in messages:
+        role = "assistant" if msg.sender == "ai" else "user"
+        anthropic_messages.append({"role": role, "content": msg.text})
+    return anthropic_messages
+
+
+def _inject_current_datetime(anthropic_messages: list, datetime_block: str) -> list:
+    """Prepend the current-datetime block to the latest user turn.
+
+    The datetime changes every request, so it is kept out of the cache_control system
+    prefix (which must stay byte-identical for prompt-cache hits) and delivered here in the
+    user turn instead. Handles both string content (prepended as text) and list/multimodal
+    content (prepended as a leading text block). Falls back to appending a new user message
+    only if there is no user turn to attach it to.
+    """
+    if not datetime_block:
+        return anthropic_messages
+    for msg in reversed(anthropic_messages):
+        if msg["role"] != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            msg["content"] = f"{datetime_block}\n\n{content}"
+        elif isinstance(content, list):
+            msg["content"] = [{"type": "text", "text": datetime_block}, *content]
+        else:
+            break  # unexpected content shape — fall back to a separate user message
+        return anthropic_messages
+    anthropic_messages.append({"role": "user", "content": datetime_block})
+    return anthropic_messages
+
+
+# ---------------------------------------------------------------------------
+# Core Anthropic agent streaming loop
+# ---------------------------------------------------------------------------
 
 
 async def _run_anthropic_agent_stream(
@@ -655,7 +498,11 @@ async def _run_anthropic_agent_stream(
     Calls Anthropic's messages API, executes tool calls, feeds results back,
     and repeats until the model stops requesting tools.
     """
-    system_blocks = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+    # System prompt with cache_control for Anthropic prompt caching
+    # TTL=1h: Anthropic changed default from 1h→5m on 2026-03-06; interactive chat
+    # sessions have gaps >5min between turns, so the 5-min default kills cache hit rate.
+    system_blocks = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+
     loop_iteration = 0
 
     while True:
@@ -669,6 +516,11 @@ async def _run_anthropic_agent_stream(
                 messages=messages,
                 tools=tool_schemas,
                 max_tokens=8192,
+                # Anthropic moves this breakpoint to the last cacheable message
+                # block on every request. That incrementally caches both the
+                # append-only inter-turn history epoch and each agentic tool-loop
+                # iteration while the explicit system breakpoint remains stable.
+                cache_control={"type": "ephemeral", "ttl": "1h"},
             ) as stream:
                 async for event in stream:
                     if event.type == "content_block_delta" and hasattr(event.delta, 'type'):
@@ -684,7 +536,12 @@ async def _run_anthropic_agent_stream(
                             await callback.put_data(event.delta.text)
 
                     elif event.type == "content_block_start":
-                        if hasattr(event.content_block, 'type') and event.content_block.type == "tool_use":
+                        if hasattr(event.content_block, 'type') and event.content_block.type == "server_tool_use":
+                            server_tool_name = getattr(event.content_block, 'name', '')
+                            if server_tool_name == 'web_search':
+                                await callback.put_thought('Searching the web')
+                            logger.info(f"Server tool invoked: {server_tool_name}")
+                        elif hasattr(event.content_block, 'type') and event.content_block.type == "tool_use":
                             tool_name = event.content_block.name
                             if 'tool_search' in tool_name:
                                 logger.info(f"Tool search invoked (server-side)")
@@ -697,7 +554,7 @@ async def _run_anthropic_agent_stream(
                 response = await stream.get_final_message()
 
         except Exception as e:
-            logger.error(f"Anthropic API error: {e}")
+            await handle_llm_error_async(e, 'anthropic', feature='chat_agent', model=ANTHROPIC_AGENT_MODEL)
             await callback.put_data(f"\n\nSorry, I encountered an error. Please try again.")
             await callback.end()
             return
@@ -753,36 +610,166 @@ async def _run_anthropic_agent_stream(
     await callback.end()
 
 
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+async def next_stream_chunk(callback: AsyncStreamingCallback, task: asyncio.Task, timeout_seconds: float) -> str | None:
+    """Return the next callback chunk while supervising the producer task.
+
+    The callback queue is not a completion primitive: an uncaught producer
+    error can leave it empty forever. Race the queue receive against the
+    producer so unexpected completion is surfaced immediately, and bound an
+    otherwise silent dependency stall below the client/proxy deadline.
+    """
+    queue_get_task = asyncio.create_task(callback.queue.get())
+    try:
+        completed, _pending = await asyncio.wait(
+            {queue_get_task, task},
+            timeout=timeout_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if queue_get_task in completed:
+            return queue_get_task.result()
+
+        if task in completed:
+            try:
+                task.result()
+            except asyncio.CancelledError as error:
+                raise RuntimeError('agent producer was cancelled') from error
+            raise RuntimeError('agent producer exited without an end-of-stream callback')
+
+        raise asyncio.TimeoutError
+    finally:
+        if not queue_get_task.done():
+            queue_get_task.cancel()
+            try:
+                await queue_get_task
+            except asyncio.CancelledError:
+                pass
+
+
+async def cancel_stream_task(task: asyncio.Task) -> None:
+    """Request cancellation without letting a non-cooperative dependency hold the SSE open."""
+    if task.done():
+        return
+
+    task.cancel()
+    completed, _pending = await asyncio.wait({task}, timeout=AGENT_STREAM_CANCEL_GRACE_SECONDS)
+    if task not in completed:
+        # A dependency that suppresses cancellation must not keep a client
+        # request alive. Retain a done callback solely to consume any eventual
+        # exception rather than leaking an unhandled-task warning.
+        task.cancel()
+        task.add_done_callback(_consume_agent_task_exception)
+        logger.error('Agent stream producer ignored cancellation within %.1fs', AGENT_STREAM_CANCEL_GRACE_SECONDS)
+
+
+def _consume_agent_task_exception(task: asyncio.Task) -> None:
+    """Consume a detached task result without logging raw provider data."""
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception as error:
+        logger.error('Detached agent stream producer failed error_type=%s', type(error).__name__)
+
+
 @_traceable(name="chat.anthropic.stream", run_type="chain")
 async def _execute_agentic_chat_stream_anthropic(
     uid: str,
     messages: List[Message],
-    app: Optional[App],
-    callback_data: dict,
-    chat_session: Optional[ChatSession],
-    context: Optional[PageContext],
+    app: Optional[App] = None,
+    callback_data: dict = None,
+    chat_session: Optional[ChatSession] = None,
+    context: Optional[PageContext] = None,
+    platform: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
-    """Anthropic streaming implementation."""
-    system_prompt = _get_agentic_qa_prompt(uid, app, messages, context=context)
+    """Execute an agentic chat interaction with streaming.
 
-    prompt_name, prompt_commit, prompt_source = None, None, None
+    Yields formatted chunks with "data: " or "think: " prefixes.
+    """
+    first_event_deadline = asyncio.get_running_loop().time() + AGENT_STREAM_FIRST_EVENT_TIMEOUT_SECONDS
     try:
-        from utils.observability.langsmith_prompts import get_prompt_metadata
-        prompt_name, prompt_commit, prompt_source = get_prompt_metadata()
-    except Exception as e:
-        logger.error(f"Could not get prompt metadata: {e}")
+        # Resolve the user's timezone once and reuse it for both the system prompt and the
+        # injected datetime block, avoiding a duplicate notification_db lookup per request.
+        # These helpers perform Firestore and LangSmith I/O before the producer task exists,
+        # so they share the first-event deadline instead of leaving the SSE body silent.
+        async with asyncio.timeout(AGENT_STREAM_FIRST_EVENT_TIMEOUT_SECONDS):
+            tz = await run_blocking(db_executor, get_user_timezone, uid)
+            system_prompt = await run_blocking(
+                db_executor, _get_agentic_qa_prompt, uid, app, messages, context=context, tz=tz, platform=platform
+            )
 
-    core_tools = list(CORE_TOOLS)
-    app_tools = []
-    try:
-        app_tools = load_app_tools(uid)
-        if app_tools:
-            logger.info(f"Loaded {len(app_tools)} app tools (deferred via tool search)")
-    except Exception as e:
-        logger.error(f"Error loading app tools: {e}")
+            # Get prompt metadata for tracing/versioning
+            prompt_name, prompt_commit, prompt_source = None, None, None
+            try:
+                from utils.observability.langsmith_prompts import get_prompt_metadata
 
-    tool_schemas, tool_registry = _convert_tools_anthropic(core_tools, app_tools)
+                prompt_name, prompt_commit, prompt_source = get_prompt_metadata()
+            except Exception as error:
+                logger.error('Could not get prompt metadata error_type=%s', type(error).__name__)
+
+            # Core tools (fixed order) — always visible to Claude
+            core_tools = list(CORE_TOOLS)
+
+            # Dynamic app tools — deferred, discovered on-demand via tool search
+            app_tools = []
+            try:
+                app_tools = await run_blocking(db_executor, load_app_tools, uid)
+                if app_tools:
+                    logger.info(f"Loaded {len(app_tools)} app tools (deferred via tool search)")
+            except Exception as error:
+                logger.error('Error loading app tools error_type=%s', type(error).__name__)
+    except asyncio.TimeoutError:
+        logger.warning('Agent stream timed out before the producer started uid=%s', uid)
+        if callback_data is not None:
+            callback_data['error'] = 'setup_timeout'
+        yield f'error: {AGENT_STREAM_TIMEOUT_MESSAGE}'
+        return
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        logger.error('Agent stream setup failed uid=%s error_type=%s', uid, type(error).__name__)
+        if callback_data is not None:
+            callback_data['error'] = type(error).__name__
+        yield f'error: {AGENT_STREAM_FAILURE_MESSAGE}'
+        return
+
+    # Append app tool awareness to system prompt so Claude knows to search for them
+    if app_tools:
+        app_names = set()
+        for t in app_tools:
+            # Tool names are prefixed with app_id; extract the human-readable app name from description
+            app_names.add(t.name)
+        app_tool_names = ", ".join(sorted(app_names))
+        system_prompt += f"""
+
+<available_app_tools>
+You have access to additional tools from the user's connected apps. These tools are discoverable via the tool_search_tool_regex tool. When the user asks you to do something related to an external service (e.g. GitHub, Twitter, Slack, Google Calendar, Notion, Shopify, WhatsApp, Splitwise, etc.), search for the relevant tool using tool_search_tool_regex with a keyword like "github", "issue", "tweet", etc.
+
+Available app tool names: {app_tool_names}
+
+IMPORTANT: Always search for and use these tools when relevant. Never tell the user you don't have access to an integration if a matching tool exists above.
+</available_app_tools>"""
+
+    # Instruct Claude to use fetch_url_tool for any direct URL in the conversation.
+    # Without this, Claude's built-in "I can't browse links" behavior takes over.
+    system_prompt += """
+
+<url_fetching_instructions>
+You have fetch_url_tool available. When the user shares any URL (starting with http:// or https://), you MUST call fetch_url_tool to read its content before responding. Never say you cannot browse, visit, or read a URL. Always attempt to fetch it first.
+</url_fetching_instructions>"""
+
+    # Convert tools to Anthropic format (core = visible, app = defer_loading)
+    tool_schemas, tool_registry = _convert_tools(core_tools, app_tools)
+
+    # Convert messages to Anthropic format. The current datetime is injected into the user
+    # turn (not the system prompt) so the cache_control system prefix stays byte-stable.
     anthropic_messages = _messages_to_anthropic(messages)
+    anthropic_messages = _inject_current_datetime(anthropic_messages, get_current_datetime_block(uid, tz=tz))
+
     callback = AsyncStreamingCallback()
     conversations_collected = []
     safety_guard = AgentSafetyGuard(max_tool_calls=25, max_context_tokens=500000)
@@ -820,12 +807,58 @@ async def _execute_agentic_chat_stream_anthropic(
         )
     )
 
+    def keep_streamed_answer() -> bool:
+        """Preserve what already reached the user when the stream stops early.
+
+        The bounded deadline and failure paths cancel the producer, but the
+        tokens yielded before that are a real answer the user watched arrive.
+        Returns whether there was anything to keep.
+        """
+        if callback_data is None:
+            return False
+        streamed = ''.join(full_response)
+        if not streamed:
+            return False
+        callback_data['answer'] = streamed
+        callback_data['memories_found'] = conversations_collected if conversations_collected else []
+        callback_data['ask_for_nps'] = tool_usage_count > 0
+        chart_data_from_config = configurable.get('chart_data')
+        if chart_data_from_config:
+            callback_data['chart_data'] = chart_data_from_config
+        return True
+
+    # Stream from callback queue
     try:
+        started_at = asyncio.get_running_loop().time()
+        received_first_event = False
         while True:
-            chunk = await callback.queue.get()
+            remaining_seconds = AGENT_STREAM_MAX_DURATION_SECONDS - (asyncio.get_running_loop().time() - started_at)
+            if remaining_seconds <= 0:
+                raise asyncio.TimeoutError
+
+            wait_timeout = min(
+                (
+                    max(0, first_event_deadline - asyncio.get_running_loop().time())
+                    if not received_first_event
+                    else AGENT_STREAM_PROGRESS_HEARTBEAT_SECONDS
+                ),
+                remaining_seconds,
+            )
+            try:
+                chunk = await next_stream_chunk(callback, task, wait_timeout)
+            except asyncio.TimeoutError:
+                # A successful first status/token means the agent can be in a
+                # deliberately long tool call (some app tools allow 120s).
+                # Keep the proxy/client stream alive until the hard task cap.
+                if received_first_event and remaining_seconds > wait_timeout:
+                    yield f'think: {AGENT_STREAM_PROGRESS_HEARTBEAT}'
+                    continue
+                raise
             if chunk is None:
                 break
-            if chunk.startswith("think: "):
+
+            received_first_event = True
+            if chunk.startswith("think: ") and chunk != f'think: {AGENT_STREAM_PROGRESS_HEARTBEAT}':
                 tool_usage_count += 1
             yield chunk
 
@@ -840,42 +873,31 @@ async def _execute_agentic_chat_stream_anthropic(
                 callback_data['chart_data'] = chart_data
             logger.info(f"Collected {len(callback_data['memories_found'])} conversations for citation")
 
-    except asyncio.CancelledError:
-        task.cancel()
-        raise
-    except Exception as e:
-        logger.error(f"Error in Anthropic stream: {e}")
-        traceback.print_exc()
+    except asyncio.TimeoutError:
+        logger.warning('Agent stream reached its bounded deadline uid=%s', uid)
+        await cancel_stream_task(task)
         if callback_data is not None:
-            callback_data['error'] = str(e)
+            callback_data['error'] = 'idle_timeout'
+        if keep_streamed_answer():
+            yield None
+            return
+        yield f'error: {AGENT_STREAM_TIMEOUT_MESSAGE}'
+        return
+    except asyncio.CancelledError:
+        await cancel_stream_task(task)
+        raise
+    except Exception as error:
+        logger.error('Agent stream failed uid=%s error_type=%s', uid, type(error).__name__)
+        await cancel_stream_task(task)
+        if callback_data is not None:
+            callback_data['error'] = type(error).__name__
+        if keep_streamed_answer():
+            yield None
+            return
+        yield f'error: {AGENT_STREAM_FAILURE_MESSAGE}'
+        return
+    finally:
+        if not task.done():
+            task.cancel()
 
-    yield None
-
-
-# ---------------------------------------------------------------------------
-# Public API — routes to the selected provider
-# ---------------------------------------------------------------------------
-
-async def execute_agentic_chat_stream(
-    uid: str,
-    messages: List[Message],
-    app: Optional[App] = None,
-    callback_data: dict = None,
-    chat_session: Optional[ChatSession] = None,
-    context: Optional[PageContext] = None,
-) -> AsyncGenerator[str, None]:
-    """Execute an agentic chat interaction with streaming.
-
-    Provider is selected by the CHAT_PROVIDER env var (default: openai).
-    Yields formatted chunks with "data: " or "think: " prefixes.
-    """
-    if CHAT_PROVIDER == 'anthropic':
-        async for chunk in _execute_agentic_chat_stream_anthropic(
-            uid, messages, app, callback_data, chat_session, context
-        ):
-            yield chunk
-    else:
-        async for chunk in _execute_agentic_chat_stream_openai(
-            uid, messages, app, callback_data, chat_session, context
-        ):
-            yield chunk
+    yield None  # Signal completion

@@ -1,10 +1,10 @@
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 
 import 'package:provider/provider.dart';
 
 import 'package:omi/l10n/app_localizations.dart';
 import 'package:omi/providers/app_provider.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/app_localizations_helper.dart';
 
 class FilterBottomSheet extends StatelessWidget {
@@ -28,14 +28,15 @@ class FilterBottomSheet extends StatelessWidget {
                 child: Row(
                   children: [
                     Text(
-                      AppLocalizations.of(context)!.filters,
+                      AppLocalizations.of(context).filters,
                       style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w600, color: Colors.white),
                     ),
                     if (provider.filters.isNotEmpty) ...[
                       const SizedBox(width: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(color: Color(0xFF8B5CF6), borderRadius: BorderRadius.circular(12)),
+                        decoration:
+                            BoxDecoration(color: const Color(0xFF8B5CF6), borderRadius: BorderRadius.circular(12)),
                         child: Text(
                           '${provider.filters.length}',
                           style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
@@ -44,6 +45,7 @@ class FilterBottomSheet extends StatelessWidget {
                     ],
                     const Spacer(),
                     IconButton(
+                      key: const ValueKey('filter_sheet_close_button'),
                       onPressed: () => Navigator.of(context).pop(),
                       icon: const Icon(Icons.close, color: Colors.white, size: 24),
                     ),
@@ -52,7 +54,7 @@ class FilterBottomSheet extends StatelessWidget {
               ),
 
               // Divider
-              Container(margin: const EdgeInsets.symmetric(vertical: 16), height: 1, color: Color(0xFF35343B)),
+              Container(margin: const EdgeInsets.symmetric(vertical: 16), height: 1, color: const Color(0xFF35343B)),
 
               // Content
               Expanded(
@@ -62,28 +64,28 @@ class FilterBottomSheet extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       // Rating
-                      _buildSectionTitle(AppLocalizations.of(context)!.rating),
+                      _buildSectionTitle(AppLocalizations.of(context).rating),
                       const SizedBox(height: 12),
                       _buildRatingSelector(provider),
 
                       const SizedBox(height: 32),
 
                       // Categories
-                      _buildSectionTitle(AppLocalizations.of(context)!.categories),
+                      _buildSectionTitle(AppLocalizations.of(context).categories),
                       const SizedBox(height: 12),
                       _buildCategoryChips(context, provider),
 
                       const SizedBox(height: 32),
 
                       // Sort Options
-                      _buildSectionTitle(AppLocalizations.of(context)!.sortBy),
+                      _buildSectionTitle(AppLocalizations.of(context).sortBy),
                       const SizedBox(height: 12),
                       _buildSortOptions(context, provider),
 
                       const SizedBox(height: 32),
 
                       // Capabilities
-                      _buildSectionTitle(AppLocalizations.of(context)!.capabilities),
+                      _buildSectionTitle(AppLocalizations.of(context).capabilities),
                       const SizedBox(height: 12),
                       _buildCapabilities(context, provider),
 
@@ -96,17 +98,18 @@ class FilterBottomSheet extends StatelessWidget {
               // Bottom buttons
               Container(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 40),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1C1C1E),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF1C1C1E),
                   border: Border(top: BorderSide(color: Color(0xFF35343B), width: 1)),
                 ),
                 child: Row(
                   children: [
                     Expanded(
                       child: TextButton(
+                        key: const ValueKey('filter_sheet_reset_button'),
                         onPressed: () {
                           provider.clearFilters();
-                          MixpanelManager().appsClearFilters();
+                          PlatformManager.instance.analytics.appsClearFilters();
                           Navigator.of(context).pop();
                           Future.microtask(() => provider.applyFilters());
                         },
@@ -118,7 +121,7 @@ class FilterBottomSheet extends StatelessWidget {
                           ),
                         ),
                         child: Text(
-                          AppLocalizations.of(context)!.resetFilters,
+                          AppLocalizations.of(context).resetFilters,
                           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.white),
                         ),
                       ),
@@ -126,6 +129,7 @@ class FilterBottomSheet extends StatelessWidget {
                     const SizedBox(width: 16),
                     Expanded(
                       child: ElevatedButton(
+                        key: const ValueKey('filter_sheet_apply_button'),
                         onPressed: () {
                           Navigator.of(context).pop();
                           Future.microtask(() => provider.applyFilters());
@@ -136,7 +140,7 @@ class FilterBottomSheet extends StatelessWidget {
                           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         ),
                         child: Text(
-                          AppLocalizations.of(context)!.applyFilters,
+                          AppLocalizations.of(context).applyFilters,
                           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.black),
                         ),
                       ),
@@ -170,13 +174,16 @@ class FilterBottomSheet extends StatelessWidget {
           child: GestureDetector(
             onTap: () {
               provider.addOrRemoveFilter(filterKey, 'Rating');
-              MixpanelManager().appsRatingFilter(filterKey, provider.isFilterSelected(filterKey, 'Rating'));
+              PlatformManager.instance.analytics.appsRatingFilter(
+                filterKey,
+                provider.isFilterSelected(filterKey, 'Rating'),
+              );
             },
             child: Container(
               margin: const EdgeInsets.only(right: 8),
               padding: const EdgeInsets.symmetric(vertical: 12),
               decoration: BoxDecoration(
-                color: isSelected ? Color(0xFF8B5CF6) : Color(0xFF35343B),
+                color: isSelected ? const Color(0xFF8B5CF6) : const Color(0xFF35343B),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Center(
@@ -206,12 +213,15 @@ class FilterBottomSheet extends StatelessWidget {
         return GestureDetector(
           onTap: () {
             provider.addOrRemoveCategoryFilter(category);
-            MixpanelManager().appsCategoryFilter(category.title, provider.isCategoryFilterSelected(category));
+            PlatformManager.instance.analytics.appsCategoryFilter(
+              category.title,
+              provider.isCategoryFilterSelected(category),
+            );
           },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: isSelected ? Color(0xFF8B5CF6) : Color(0xFF35343B),
+              color: isSelected ? const Color(0xFF8B5CF6) : const Color(0xFF35343B),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Text(
@@ -229,7 +239,7 @@ class FilterBottomSheet extends StatelessWidget {
   }
 
   Widget _buildSortOptions(BuildContext context, AppProvider provider) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
     final sortOptions = [
       {'label': 'A-Z', 'key': 'A-Z'},
       {'label': 'Z-A', 'key': 'Z-A'},
@@ -247,14 +257,17 @@ class FilterBottomSheet extends StatelessWidget {
           child: GestureDetector(
             onTap: () {
               provider.addOrRemoveFilter(option['key']!, 'Sort');
-              MixpanelManager().appsSortFilter(option['key']!, provider.isFilterSelected(option['key']!, 'Sort'));
+              PlatformManager.instance.analytics.appsSortFilter(
+                option['key']!,
+                provider.isFilterSelected(option['key']!, 'Sort'),
+              );
             },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
-                color: const Color(0xFF1F1F25).withOpacity(0.5),
+                color: const Color(0xFF1F1F25).withValues(alpha: 0.5),
                 borderRadius: BorderRadius.circular(12),
-                border: isSelected ? Border.all(color: Color(0xFF8B5CF6), width: 2) : null,
+                border: isSelected ? Border.all(color: const Color(0xFF8B5CF6), width: 2) : null,
               ),
               child: Row(
                 children: [
@@ -263,8 +276,8 @@ class FilterBottomSheet extends StatelessWidget {
                     height: 20,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: isSelected ? Color(0xFF8B5CF6) : Colors.transparent,
-                      border: Border.all(color: isSelected ? Color(0xFF8B5CF6) : Colors.grey.shade500, width: 2),
+                      color: isSelected ? const Color(0xFF8B5CF6) : Colors.transparent,
+                      border: Border.all(color: isSelected ? const Color(0xFF8B5CF6) : Colors.grey.shade500, width: 2),
                     ),
                     child: isSelected ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
                   ),
@@ -296,12 +309,15 @@ class FilterBottomSheet extends StatelessWidget {
         return GestureDetector(
           onTap: () {
             provider.addOrRemoveCapabilityFilter(capability);
-            MixpanelManager().appsCapabilityFilter(capability.title, provider.isCapabilityFilterSelected(capability));
+            PlatformManager.instance.analytics.appsCapabilityFilter(
+              capability.title,
+              provider.isCapabilityFilterSelected(capability),
+            );
           },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: isSelected ? Color(0xFF8B5CF6) : Color(0xFF35343B),
+              color: isSelected ? const Color(0xFF8B5CF6) : const Color(0xFF35343B),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Text(

@@ -3,32 +3,45 @@ import asyncio
 import json
 import time
 from collections import deque
-from datetime import datetime, timezone
-from typing import Dict, List, Set
+from typing import Any, Dict, List, Optional, TypedDict, cast
 
 from fastapi import APIRouter
 from fastapi.websockets import WebSocketDisconnect, WebSocket
 from starlette.websockets import WebSocketState
 
 import database.conversations as conversations_db
+from database import conversation_finalization_jobs as finalization_jobs_db
 from database import users as users_db
-from database.redis_db import get_cached_user_geolocation
-from models.conversation import Conversation, ConversationStatus, Geolocation
+from services.conversation_finalization import final_attempt_failed
 from utils.apps import is_audio_bytes_app_enabled
 from utils.app_integrations import (
     trigger_realtime_integrations,
     trigger_realtime_audio_bytes,
-    trigger_external_integrations,
 )
-from utils.conversations.location import get_google_maps_location
-from utils.conversations.process_conversation import process_conversation
+from utils.byok import set_byok_keys, set_byok_uid
+from utils.conversations import lifecycle as lifecycle_service
+from utils.conversations.finalizer import (
+    ConversationFinalizationDisposition,
+    ConversationFinalizationError,
+    finalize_persisted_conversation,
+)
+from utils.executors import db_executor, storage_executor, run_blocking, start_background_task
+from utils.async_tasks import (
+    supervise_tasks,
+    drain_tasks,
+    create_named_task,
+    wait_for_event,
+)
 from utils.webhooks import (
     send_audio_bytes_developer_webhook,
     realtime_transcript_webhook,
     get_audio_bytes_webhook_seconds,
 )
-from utils.other.storage import upload_audio_chunk, upload_audio_chunks_batch
+from utils.cloud_tasks import get_listen_finalization_tasks_max_attempts, is_audio_merge_dispatch_enabled
+from utils.other.storage import maybe_invalidate_conversation_playback, upload_audio_chunks_batch
 from utils.metrics import PUSHER_ACTIVE_WS_CONNECTIONS
+from utils.readiness import ReadinessGate
+from utils.observability.journeys import JourneyAttempt, JourneyOutcome, record_capture_finalization_terminal
 from utils.speaker_identification import extract_speaker_samples
 import logging
 
@@ -46,8 +59,8 @@ PRIVATE_CLOUD_CHUNK_DURATION = 60.0
 PRIVATE_CLOUD_BATCH_MAX_AGE = 60.0  # seconds — flush batch if oldest chunk exceeds this age
 PRIVATE_CLOUD_SYNC_MAX_RETRIES = 3
 
-# Queue warning thresholds
-PRIVATE_CLOUD_QUEUE_WARN_SIZE = 50
+# Queue size limits
+PRIVATE_CLOUD_QUEUE_MAX_SIZE = 20  # ~18MB/connection max (30 conns × 18MB = 540MB) — prevents OOM with headroom
 SPEAKER_SAMPLE_QUEUE_WARN_SIZE = 100
 
 # Constants for transcript queue batching
@@ -57,57 +70,241 @@ TRANSCRIPT_QUEUE_WARN_SIZE = 50
 # Constants for audio bytes queue
 AUDIO_BYTES_QUEUE_WARN_SIZE = 20
 
+# Receive timeout: if no data arrives for this long, the connection is considered dead.
+# Backend-listen sends heartbeats every ~30s, so 5 minutes without ANY data means the
+# upstream connection is gone.  Without this, half-open TCP connections hang forever,
+# leaking the gauge + ~15 MB per ghost connection.
+WS_RECEIVE_TIMEOUT = 300.0  # seconds
 
-async def _process_conversation_task(uid: str, conversation_id: str, language: str, websocket: WebSocket):
-    """Process a conversation and send result back to _listen via websocket."""
+# After receive_task exits, background tasks get this long to drain their queues
+# before being force-cancelled.  Prevents hung GCS uploads or webhook calls from
+# blocking cleanup indefinitely.
+BG_DRAIN_TIMEOUT = 30.0  # seconds
+
+
+def pusher_session_outcome(close_code: int, *, application_failed: bool = False) -> JourneyOutcome:
+    """Classify accepted sessions without counting normal disconnects as failures."""
+    if application_failed or close_code == 1011:
+        return 'failure'
+    if close_code in {1000, 1001}:
+        return 'success'
+    return 'cancelled'
+
+
+class _SpeakerSampleRequest(TypedDict):
+    person_id: str
+    conversation_id: str
+    segment_ids: List[str]
+    queued_at: float
+
+
+class _TranscriptQueueItem(TypedDict):
+    segments: List[Dict[str, Any]]
+    memory_id: Optional[str]
+
+
+class _AudioBytesQueueItem(TypedDict):
+    type: str
+    sample_rate: int
+    data: bytearray
+
+
+class _PrivateCloudChunk(TypedDict):
+    data: bytes
+    conversation_id: str
+    timestamp: float
+    retries: int
+
+
+async def _process_conversation_task(
+    uid: str,
+    conversation_id: str,
+    language: str,
+    websocket: WebSocket,
+    byok_keys: Optional[Dict[str, str]] = None,
+    finalization_job_id: Optional[str] = None,
+    dispatch_generation: Optional[int] = None,
+) -> None:
+    """Process a leased conversation job and send a minimal result to listen.
+
+    `byok_keys` is forwarded from the listen service. When present, LLM and
+    STT calls made inside process_conversation route through the user's own
+    provider keys instead of Omi's env keys.
+    """
+    if byok_keys:
+        set_byok_keys(byok_keys)
+        set_byok_uid(uid)
+
+    async def send_result(result: Dict[str, Any]) -> None:
+        """Attempt the optional live acknowledgement after durable work.
+
+        The Firestore finalization transition is authoritative. A listener can
+        close after handing opcode 104 to pusher, so a failed result write must
+        never turn an already-completed durable job into a worker failure.
+        """
+        data = bytearray()
+        data.extend(struct.pack("I", 201))
+        data.extend(bytes(json.dumps(result), "utf-8"))
+        try:
+            await websocket.send_bytes(bytes(data))
+        except (RuntimeError, WebSocketDisconnect):
+            logger.info(
+                'pusher finalization result undeliverable after source close uid=%s conversation=%s',
+                uid,
+                conversation_id,
+            )
+
+    job_id: Optional[str] = None
+    generation: Optional[int] = None
+    lease_epoch: Optional[int] = None
+    attempt_count: int = 0
+
+    async def record_failure(failure_code: str) -> bool:
+        """Release the lease. Returns whether this was the terminal attempt.
+
+        Inline dispatch has no Cloud Tasks worker to exhaust the attempt budget,
+        so the claimed attempt count is the only bound on a deterministically
+        failing job. Without a terminal state the conversation would stay
+        `processing` forever and be re-finalized by every later session.
+        """
+        if job_id is None or generation is None or lease_epoch is None:
+            return False
+        terminal = attempt_count >= get_listen_finalization_tasks_max_attempts()
+        try:
+            if terminal:
+                marked_dead_letter = await run_blocking(
+                    db_executor,
+                    final_attempt_failed,
+                    job_id,
+                    generation,
+                    lease_epoch,
+                    attempt_count,
+                )
+                if not marked_dead_letter:
+                    return False
+                return True
+            await run_blocking(
+                db_executor,
+                finalization_jobs_db.mark_finalization_retryable,
+                job_id,
+                generation,
+                lease_epoch,
+                failure_code,
+            )
+        except Exception:
+            logger.error(
+                'pusher finalization recovery update failed uid=%s conversation=%s failure=%s terminal=%s',
+                uid,
+                conversation_id,
+                failure_code,
+                terminal,
+            )
+            return False
+        return False
+
     try:
-        conversation_data = conversations_db.get_conversation(uid, conversation_id)
-        if not conversation_data:
-            # Send error response
-            response = {"conversation_id": conversation_id, "error": "conversation_not_found"}
-            data = bytearray()
-            data.extend(struct.pack("I", 201))
-            data.extend(bytes(json.dumps(response), "utf-8"))
-            await websocket.send_bytes(data)
+        if not finalization_job_id or dispatch_generation is None:
+            # Every finalization request must be mediated by the Firestore
+            # owner.  Accepting the legacy frame would allow a pending pusher
+            # session to bypass the durable claim and double-process work.
+            await send_result({'conversation_id': conversation_id, 'error': 'durable_job_required'})
             return
 
-        conversation = Conversation(**conversation_data)
+        job_id = finalization_job_id
+        generation = dispatch_generation
 
-        if conversation.status != ConversationStatus.processing:
-            conversations_db.update_conversation_status(uid, conversation.id, ConversationStatus.processing)
-            conversation.status = ConversationStatus.processing
+        claim = await run_blocking(
+            db_executor,
+            finalization_jobs_db.claim_finalization_job,
+            job_id,
+            generation,
+            allow_byok=bool(byok_keys),
+            expected_uid=uid,
+            expected_conversation_id=conversation_id,
+        )
+        claim_status = claim['status']
+        if claim_status == 'fenced':
+            await send_result({'conversation_id': conversation_id, 'fenced': True})
+            return
+        if claim_status == 'completed':
+            await send_result({'conversation_id': conversation_id, 'success': True})
+            return
+        if claim_status != 'claimed':
+            await send_result(
+                {
+                    'conversation_id': conversation_id,
+                    'error': f'job_{claim_status}',
+                    # A dead-lettered job is never actionable again; telling the
+                    # live session it is terminal stops it from re-requesting.
+                    'terminal': claim_status in finalization_jobs_db.TERMINAL_JOB_STATUSES,
+                }
+            )
+            return
+        attempt_count = claim['attempt_count']
+        lease_epoch = claim['lease_epoch']
+        if lease_epoch is None:
+            logger.error(
+                'pusher finalization claim returned no lease epoch uid=%s conversation=%s', uid, conversation_id
+            )
+            await send_result({'conversation_id': conversation_id, 'error': 'processing_failed'})
+            return
 
+        disposition = await finalize_persisted_conversation(
+            uid,
+            conversation_id,
+            language,
+            finalization_job_id=job_id,
+            dispatch_generation=generation,
+            lease_epoch=lease_epoch,
+        )
+
+        if disposition == ConversationFinalizationDisposition.fenced:
+            completed = await run_blocking(
+                db_executor,
+                lifecycle_service.complete_fenced_finalization,
+                job_id,
+                generation,
+                lease_epoch,
+            )
+        else:
+            completed = await run_blocking(
+                db_executor,
+                finalization_jobs_db.mark_finalization_completed,
+                job_id,
+                generation,
+                lease_epoch,
+            )
+        if not completed:
+            await send_result({'conversation_id': conversation_id, 'error': 'job_completion_conflict'})
+            return
+        if disposition == ConversationFinalizationDisposition.fenced:
+            record_capture_finalization_terminal('stale', claim.get('created_at'))
+            await send_result({'conversation_id': conversation_id, 'fenced': True})
+            return
+        record_capture_finalization_terminal('success', claim.get('created_at'))
+        await send_result({'conversation_id': conversation_id, 'success': True})
+    except ConversationFinalizationError:
+        terminal = await record_failure('processing_failed')
+        logger.error(
+            'pusher finalization failed uid=%s conversation=%s failure=processing_failed terminal=%s',
+            uid,
+            conversation_id,
+            terminal,
+        )
         try:
-            # Geolocation
-            geolocation = get_cached_user_geolocation(uid)
-            if geolocation:
-                geolocation = Geolocation(**geolocation)
-                conversation.geolocation = get_google_maps_location(geolocation.latitude, geolocation.longitude)
-
-            # Run blocking operations in thread pool to avoid blocking event loop
-            conversation = await asyncio.to_thread(process_conversation, uid, language, conversation)
-            messages = await asyncio.to_thread(trigger_external_integrations, uid, conversation)
-        except Exception as e:
-            logger.error(f"Error processing conversation: {e} {uid} {conversation_id}")
-            conversations_db.set_conversation_as_discarded(uid, conversation.id)
-            conversation.discarded = True
-            messages = []
-
-        # Send success response back (minimal - transcribe will fetch from DB)
-        response = {"conversation_id": conversation_id, "success": True}
-        data = bytearray()
-        data.extend(struct.pack("I", 201))
-        data.extend(bytes(json.dumps(response), "utf-8"))
-        await websocket.send_bytes(data)
-
-    except Exception as e:
-        logger.error(f"Error in _process_conversation_task: {e} {uid} {conversation_id}")
-        response = {"conversation_id": conversation_id, "error": str(e)}
-        data = bytearray()
-        data.extend(struct.pack("I", 201))
-        data.extend(bytes(json.dumps(response), "utf-8"))
+            await send_result({'conversation_id': conversation_id, 'error': 'processing_failed', 'terminal': terminal})
+        except Exception:
+            pass
+    except Exception:
+        terminal = await record_failure('worker_failed')
+        logger.error(
+            'pusher finalization task failed uid=%s conversation=%s failure=worker_failed terminal=%s',
+            uid,
+            conversation_id,
+            terminal,
+        )
         try:
-            await websocket.send_bytes(data)
+            await send_result({'conversation_id': conversation_id, 'error': 'processing_failed', 'terminal': terminal})
         except Exception:
             pass
 
@@ -116,7 +313,7 @@ async def _websocket_util_trigger(
     websocket: WebSocket,
     uid: str,
     sample_rate: int = 8000,
-):
+) -> None:
     logger.info(f'_websocket_util_trigger {uid}')
 
     try:
@@ -126,46 +323,54 @@ async def _websocket_util_trigger(
         await websocket.close(code=1011, reason="Dirty state")
         return
 
+    # Defense-in-depth: during drain the LB should already have removed us from
+    # the NEG, but reject straggler NEW connections.  We accept the handshake
+    # FIRST so the client sees a clean WS close frame (1001 Going Away) rather
+    # than a failed HTTP upgrade — a pre-accept close is surfaced as an
+    # exception by the websockets client and recorded as a circuit-breaker
+    # failure in backend-listen (backend/utils/pusher.py), which can trip the
+    # pod's pusher circuit during a normal rollout.
+    if not ReadinessGate.is_serving():
+        logger.info(f'Rejecting new WS for {uid}: pusher is draining')
+        await websocket.close(code=1001)
+        return
+
+    journey_attempt = JourneyAttempt('pusher_session')
     websocket_active = True
+    shutdown_event = asyncio.Event()
     websocket_close_code = 1000
+    application_failed = False
 
-    # audio bytes
-    audio_bytes_webhook_delay_seconds = get_audio_bytes_webhook_seconds(uid)
-    audio_bytes_trigger_delay_seconds = 4
-    has_audio_apps_enabled = is_audio_bytes_app_enabled(uid)
-    private_cloud_sync_enabled = users_db.get_user_private_cloud_sync_enabled(uid)
-    cached_protection_level = users_db.get_data_protection_level(uid) if private_cloud_sync_enabled else None
-
-    # Track background tasks to cancel on cleanup (prevents memory leaks from fire-and-forget tasks)
-    bg_tasks: Set[asyncio.Task] = set()
-
-    def spawn(coro) -> asyncio.Task:
-        """Create a tracked background task that will be cancelled on cleanup."""
-        task = asyncio.create_task(coro)
-        bg_tasks.add(task)
-
-        def on_done(t):
-            bg_tasks.discard(t)
-            if t.cancelled():
-                return
-            exc = t.exception()
-            if exc:
-                logger.error(f"Unhandled exception in background task: {exc} {uid}")
-
-        task.add_done_callback(on_done)
-        return task
+    try:
+        # audio bytes
+        audio_bytes_webhook_delay_seconds = get_audio_bytes_webhook_seconds(uid)
+        audio_bytes_trigger_delay_seconds = 4
+        has_audio_apps_enabled = await run_blocking(db_executor, is_audio_bytes_app_enabled, uid)
+        private_cloud_sync_enabled = await run_blocking(db_executor, users_db.get_user_private_cloud_sync_enabled, uid)
+        cached_protection_level = (
+            (await run_blocking(db_executor, users_db.get_data_protection_level, uid))
+            if private_cloud_sync_enabled
+            else None
+        )
+    except asyncio.CancelledError:
+        journey_attempt.finish('cancelled')
+        raise
+    except Exception:
+        journey_attempt.finish('failure')
+        raise
 
     # Bounded queues — prevent unbounded memory growth during backpressure
-    speaker_sample_queue: deque = deque(maxlen=SPEAKER_SAMPLE_QUEUE_WARN_SIZE)
-    transcript_queue: deque = deque(maxlen=TRANSCRIPT_QUEUE_WARN_SIZE)
-    audio_bytes_queue: deque = deque(maxlen=AUDIO_BYTES_QUEUE_WARN_SIZE)
+    speaker_sample_queue: deque[_SpeakerSampleRequest] = deque(maxlen=SPEAKER_SAMPLE_QUEUE_WARN_SIZE)
+    transcript_queue: deque[_TranscriptQueueItem] = deque(maxlen=TRANSCRIPT_QUEUE_WARN_SIZE)
+    audio_bytes_queue: deque[_AudioBytesQueueItem] = deque(maxlen=AUDIO_BYTES_QUEUE_WARN_SIZE)
 
-    # private_cloud_queue stays unbounded — it carries irreplaceable user audio.
-    # Silent drops (via deque maxlen) would cause permanent data loss.
-    private_cloud_queue: List[dict] = []
+    # private_cloud_queue caps at PRIVATE_CLOUD_QUEUE_MAX_SIZE to prevent OOM kills.
+    # An OOM kill loses ALL queued data for ALL users on the pod — dropping the oldest
+    # chunk for one user is strictly better than killing the pod.
+    private_cloud_queue: deque[_PrivateCloudChunk] = deque(maxlen=PRIVATE_CLOUD_QUEUE_MAX_SIZE)
     audio_bytes_event = asyncio.Event()  # Signals when items are added for instant wake
 
-    async def process_private_cloud_queue():
+    async def process_private_cloud_queue() -> None:
         """Background task that batches private cloud sync uploads by conversation_id.
 
         Chunks are accumulated per conversation and flushed when:
@@ -176,9 +381,9 @@ async def _websocket_util_trigger(
         nonlocal websocket_active
 
         # Pending batches keyed by conversation_id
-        pending: Dict[str, dict] = {}
+        pending: Dict[str, Dict[str, Any]] = {}
 
-        def _add_to_batch(chunk_info: dict):
+        def _add_to_batch(chunk_info: _PrivateCloudChunk) -> None:
             conv_id = chunk_info['conversation_id']
             if conv_id not in pending:
                 pending[conv_id] = {
@@ -197,22 +402,49 @@ async def _websocket_util_trigger(
             if not batch or len(batch['data']) == 0:
                 return
             chunk_data = bytes(batch['data'])
+            del batch['data']  # free bytearray immediately — chunk_data holds the bytes copy
             timestamp = batch['timestamp']
             retries = batch.get('retries', 0)
             try:
-                chunks_to_upload = [{'data': chunk_data, 'timestamp': timestamp}]
-                await asyncio.to_thread(
-                    upload_audio_chunks_batch, chunks_to_upload, uid, conv_id, cached_protection_level
+                chunks_to_upload: List[Dict[str, Any]] = [{'data': chunk_data, 'timestamp': timestamp}]
+                await run_blocking(
+                    storage_executor,
+                    cast(Any, upload_audio_chunks_batch),
+                    chunks_to_upload,
+                    uid,
+                    conv_id,
+                    cast(str, cached_protection_level),
                 )
+                del chunks_to_upload
                 try:
-                    audio_files = await asyncio.to_thread(conversations_db.create_audio_files_from_chunks, uid, conv_id)
+                    audio_files = await run_blocking(
+                        storage_executor, conversations_db.create_audio_files_from_chunks, uid, conv_id
+                    )
                     if audio_files:
-                        await asyncio.to_thread(
+                        files_payload = [af.model_dump() for af in audio_files]
+                        await run_blocking(
+                            storage_executor,
                             conversations_db.update_conversation,
                             uid,
                             conv_id,
-                            {'audio_files': [af.dict() for af in audio_files]},
+                            {'audio_files': files_payload},
                         )
+                        # Rebuild the conversation playback artifact if a stamped one
+                        # went stale. No stamp (the live-conversation common case) → no-op.
+                        if is_audio_merge_dispatch_enabled():
+                            stamp = await run_blocking(
+                                storage_executor, conversations_db.get_conversation_audio_stamp, uid, conv_id
+                            )
+                            if stamp:
+                                await run_blocking(
+                                    storage_executor,
+                                    maybe_invalidate_conversation_playback,
+                                    uid,
+                                    conv_id,
+                                    {'conversation_audio': stamp},
+                                    files_payload,
+                                    'pusher_flush',
+                                )
                 except Exception as e:
                     logger.error(f"Error updating audio files: {e} {uid} {conv_id}")
             except Exception as e:
@@ -229,7 +461,7 @@ async def _websocket_util_trigger(
             del chunk_data
 
         while websocket_active or len(private_cloud_queue) > 0 or len(pending) > 0:
-            await asyncio.sleep(PRIVATE_CLOUD_SYNC_PROCESS_INTERVAL)
+            await wait_for_event(shutdown_event, PRIVATE_CLOUD_SYNC_PROCESS_INTERVAL)
 
             # Drain queue into pending batches
             if private_cloud_queue:
@@ -245,7 +477,7 @@ async def _websocket_util_trigger(
             batch_size_threshold = sample_rate * 2 * PRIVATE_CLOUD_CHUNK_DURATION
 
             # Determine which conversations to flush
-            conv_ids_to_flush = []
+            conv_ids_to_flush: List[str] = []
             for conv_id, batch in pending.items():
                 batch_age = now - batch['queued_at']
                 is_shutdown = not websocket_active
@@ -257,24 +489,27 @@ async def _websocket_util_trigger(
             for conv_id in conv_ids_to_flush:
                 await _flush_batch(conv_id)
 
-    async def process_speaker_sample_queue():
+    async def process_speaker_sample_queue() -> None:
         """Background task that processes speaker sample extraction requests."""
         nonlocal websocket_active
 
         while websocket_active or len(speaker_sample_queue) > 0:
-            await asyncio.sleep(SPEAKER_SAMPLE_PROCESS_INTERVAL)
+            await wait_for_event(shutdown_event, SPEAKER_SAMPLE_PROCESS_INTERVAL)
 
             if not speaker_sample_queue:
                 continue
 
             current_time = time.time()
+            is_shutdown = not websocket_active
 
-            # Separate ready and pending requests
-            ready_requests = []
-            pending_requests = []
+            # Separate ready and pending requests.
+            # On shutdown, skip the age check — process everything so pending
+            # samples aren't silently dropped when the drain timeout fires.
+            ready_requests: List[_SpeakerSampleRequest] = []
+            pending_requests: List[_SpeakerSampleRequest] = []
 
             for request in list(speaker_sample_queue):
-                if current_time - request['queued_at'] >= SPEAKER_SAMPLE_MIN_AGE:
+                if is_shutdown or current_time - request['queued_at'] >= SPEAKER_SAMPLE_MIN_AGE:
                     ready_requests.append(request)
                 else:
                     pending_requests.append(request)
@@ -300,18 +535,18 @@ async def _websocket_util_trigger(
                 except Exception as e:
                     logger.error(f"Error extracting speaker samples: {e} {uid} {conv_id}")
 
-    async def process_transcript_queue():
+    async def process_transcript_queue() -> None:
         """Batched consumer for transcript events (realtime integrations + webhooks)."""
         nonlocal websocket_active
 
         while websocket_active or len(transcript_queue) > 0:
-            await asyncio.sleep(TRANSCRIPT_QUEUE_FLUSH_INTERVAL)
+            await wait_for_event(shutdown_event, TRANSCRIPT_QUEUE_FLUSH_INTERVAL)
 
             if not transcript_queue:
                 continue
 
             # Process batch
-            batch = list(transcript_queue)
+            batch: List[_TranscriptQueueItem] = list(transcript_queue)
             transcript_queue.clear()
 
             for item in batch:
@@ -323,7 +558,7 @@ async def _websocket_util_trigger(
                 except Exception as e:
                     logger.error(f"Error processing transcript batch: {e} {uid}")
 
-    async def process_audio_bytes_queue():
+    async def process_audio_bytes_queue() -> None:
         """Event-driven consumer for audio bytes triggers (app integrations + webhooks)."""
         nonlocal websocket_active
 
@@ -332,7 +567,9 @@ async def _websocket_util_trigger(
             try:
                 await asyncio.wait_for(audio_bytes_event.wait(), timeout=1.0)
             except asyncio.TimeoutError:
-                continue  # Check websocket_active and queue on timeout
+                if shutdown_event.is_set() and not audio_bytes_queue:
+                    break
+                continue
 
             audio_bytes_event.clear()
 
@@ -340,7 +577,7 @@ async def _websocket_util_trigger(
                 continue
 
             # Process all queued items
-            batch = list(audio_bytes_queue)
+            batch: List[_AudioBytesQueueItem] = list(audio_bytes_queue)
             audio_bytes_queue.clear()
 
             for item in batch:
@@ -352,9 +589,10 @@ async def _websocket_util_trigger(
                 except Exception as e:
                     logger.error(f"Error processing audio bytes: {e} {uid}")
 
-    async def receive_tasks():
+    async def receive_tasks() -> None:
         nonlocal websocket_active
         nonlocal websocket_close_code
+        nonlocal application_failed
         nonlocal speaker_sample_queue
         nonlocal transcript_queue
         nonlocal audio_bytes_queue
@@ -362,12 +600,20 @@ async def _websocket_util_trigger(
         audiobuffer = bytearray()
         trigger_audiobuffer = bytearray()
         private_cloud_sync_buffer = bytearray()
-        private_cloud_chunk_start_time = None
-        current_conversation_id = None
+        private_cloud_chunk_start_time: Optional[float] = None
+        current_conversation_id: Optional[str] = None
 
         try:
             while websocket_active:
-                data = await websocket.receive_bytes()
+                try:
+                    data = await asyncio.wait_for(websocket.receive_bytes(), timeout=WS_RECEIVE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning(f"WebSocket receive timeout ({WS_RECEIVE_TIMEOUT}s), closing connection {uid}")
+                    # This is a dead upstream, not a normal remote close. Keep its
+                    # terminal outcome distinct from protocol close codes 1000/1001.
+                    websocket_close_code = 1011
+                    application_failed = True
+                    break
                 header_type = struct.unpack('<I', data[:4])[0]
 
                 # Heartbeat (data-frame keepalive from backend to reset GKE ILB idle timer)
@@ -384,6 +630,11 @@ async def _websocket_util_trigger(
                         and current_conversation_id != new_conversation_id
                         and len(private_cloud_sync_buffer) > 0
                     ):
+                        if len(private_cloud_queue) >= PRIVATE_CLOUD_QUEUE_MAX_SIZE:
+                            logger.warning(
+                                f"private_cloud_queue full ({len(private_cloud_queue)}/{PRIVATE_CLOUD_QUEUE_MAX_SIZE}), "
+                                f"dropping oldest chunk to prevent OOM {uid}"
+                            )
                         private_cloud_queue.append(
                             {
                                 'data': bytes(private_cloud_sync_buffer),
@@ -406,12 +657,14 @@ async def _websocket_util_trigger(
                     res = json.loads(bytes(data[4:]).decode("utf-8"))
                     segments = res.get('segments')
                     memory_id = res.get('memory_id')
-                    # Update conversation_id from transcript if provided
-                    if memory_id:
-                        current_conversation_id = memory_id
+                    # A transcript's memory_id must NOT overwrite the session's authoritative
+                    # current_conversation_id (which is set only by header 103). Doing so let a stale
+                    # lifecycle event carrying an older conversation's memory_id rebind a newer recording
+                    # session, mis-associating subsequent private-cloud audio (see issue #6952).
                     if len(transcript_queue) >= TRANSCRIPT_QUEUE_WARN_SIZE:
                         logger.warning(f"Warning: transcript_queue size {len(transcript_queue)} {uid}")
-                    # Use memory_id if available, otherwise use current_conversation_id for conversations
+                    # Route this transcript by its own memory_id when present, falling back to the
+                    # session's conversation id. This does not mutate session-scoped state.
                     conversation_or_memory_id = memory_id or current_conversation_id
                     transcript_queue.append({'segments': segments, 'memory_id': conversation_or_memory_id})
                     continue
@@ -421,9 +674,27 @@ async def _websocket_util_trigger(
                     res = json.loads(bytes(data[4:]).decode("utf-8"))
                     conversation_id = res.get('conversation_id')
                     language = res.get('language', 'en')
+                    byok_keys = res.get('byok_keys') or None
+                    finalization_job_id = res.get('finalization_job_id')
+                    dispatch_generation = res.get('dispatch_generation')
                     if conversation_id:
                         logger.info(f"Pusher received process_conversation request: {conversation_id} {uid}")
-                        spawn(_process_conversation_task(uid, conversation_id, language, websocket))
+                        # Durable finalization already has a Firestore owner. It
+                        # must survive an originating listen socket close after
+                        # this handoff, so pusher owns it at process scope. Its
+                        # lifespan drains tracked tasks on process shutdown.
+                        start_background_task(
+                            _process_conversation_task(
+                                uid,
+                                conversation_id,
+                                language,
+                                websocket,
+                                byok_keys,
+                                finalization_job_id if isinstance(finalization_job_id, str) else None,
+                                dispatch_generation if isinstance(dispatch_generation, int) else None,
+                            ),
+                            name=f'pusher_finalization:{uid}:{conversation_id}',
+                        )
                     continue
 
                 # Speaker sample extraction request - queue for background processing
@@ -470,13 +741,16 @@ async def _websocket_util_trigger(
                         private_cloud_sync_buffer.extend(audio_data)
                         # Queue chunk every PRIVATE_CLOUD_CHUNK_DURATION seconds
                         if len(private_cloud_sync_buffer) >= sample_rate * 2 * PRIVATE_CLOUD_CHUNK_DURATION:
-                            if len(private_cloud_queue) >= PRIVATE_CLOUD_QUEUE_WARN_SIZE:
-                                logger.warning(f"Warning: private_cloud_queue size {len(private_cloud_queue)} {uid}")
+                            if len(private_cloud_queue) >= PRIVATE_CLOUD_QUEUE_MAX_SIZE:
+                                logger.warning(
+                                    f"private_cloud_queue full ({len(private_cloud_queue)}/{PRIVATE_CLOUD_QUEUE_MAX_SIZE}), "
+                                    f"dropping oldest chunk to prevent OOM {uid}"
+                                )
                             private_cloud_queue.append(
                                 {
                                     'data': bytes(private_cloud_sync_buffer),
                                     'conversation_id': current_conversation_id,
-                                    'timestamp': private_cloud_chunk_start_time,
+                                    'timestamp': cast(float, private_cloud_chunk_start_time),
                                     'retries': 0,
                                 }
                             )
@@ -516,14 +790,21 @@ async def _websocket_util_trigger(
                         audiobuffer = bytearray()
                     continue
 
-        except WebSocketDisconnect:
+        except WebSocketDisconnect as exc:
+            websocket_close_code = exc.code or 1006
             logger.info("WebSocket disconnected")
         except Exception as e:
             logger.error(f'Could not process audio: error {e}')
             websocket_close_code = 1011
+            application_failed = True
         finally:
             # Flush any remaining private cloud sync buffer before shutdown
             if private_cloud_sync_enabled and current_conversation_id and len(private_cloud_sync_buffer) > 0:
+                if len(private_cloud_queue) >= PRIVATE_CLOUD_QUEUE_MAX_SIZE:
+                    logger.warning(
+                        f"private_cloud_queue full ({len(private_cloud_queue)}/{PRIVATE_CLOUD_QUEUE_MAX_SIZE}), "
+                        f"dropping oldest chunk to prevent OOM {uid}"
+                    )
                 private_cloud_queue.append(
                     {
                         'data': bytes(private_cloud_sync_buffer),
@@ -535,35 +816,63 @@ async def _websocket_util_trigger(
                 logger.info(f"Flushed final private cloud buffer: {len(private_cloud_sync_buffer)} bytes {uid}")
             websocket_active = False
 
+    bg_main_tasks: List[asyncio.Task[Any]] = []
     try:
         PUSHER_ACTIVE_WS_CONNECTIONS.inc()
-        receive_task = asyncio.create_task(receive_tasks())
-        speaker_sample_task = asyncio.create_task(process_speaker_sample_queue())
-        private_cloud_task = asyncio.create_task(process_private_cloud_queue())
-        transcript_task = asyncio.create_task(process_transcript_queue())
-        audio_bytes_task = asyncio.create_task(process_audio_bytes_queue())
-        await asyncio.gather(
-            receive_task,
-            speaker_sample_task,
-            private_cloud_task,
-            transcript_task,
-            audio_bytes_task,
-        )
+        receive_task = create_named_task(receive_tasks(), name=f"ws:{uid}:receive")
+        bg_main_tasks = [
+            create_named_task(process_speaker_sample_queue(), name=f"ws:{uid}:speaker_samples"),
+            create_named_task(process_private_cloud_queue(), name=f"ws:{uid}:private_cloud"),
+            create_named_task(process_transcript_queue(), name=f"ws:{uid}:transcripts"),
+            create_named_task(process_audio_bytes_queue(), name=f"ws:{uid}:audio_bytes"),
+        ]
 
+        exit_result = await supervise_tasks(
+            receive_task=receive_task,
+            bg_tasks=bg_main_tasks,
+            finite_tasks=None,
+            label="pusher",
+        )
+        logger.info(f"Supervisor exited: reason={exit_result.reason} task={exit_result.task_name} {uid}")
+        if exit_result.reason in {'crash', 'lifetime_done'}:
+            # A background worker dying or unexpectedly returning ends an accepted
+            # session abnormally even though the socket itself has no close frame.
+            websocket_close_code = 1011
+            application_failed = True
+
+        if receive_task.done() and not receive_task.cancelled():
+            exc = receive_task.exception()
+            if exc is not None:
+                raise exc
+
+        if not receive_task.done():
+            websocket_active = False
+            receive_task.cancel()
+            try:
+                await receive_task
+            except asyncio.CancelledError:
+                pass
+
+        shutdown_event.set()
+        await drain_tasks(bg_main_tasks, timeout=BG_DRAIN_TIMEOUT, label="pusher_bg", cancel=False)
+
+    except asyncio.CancelledError:
+        websocket_close_code = 1006
+        raise
     except Exception as e:
         logger.error(f"Error during WebSocket operation: {e}")
+        websocket_close_code = 1011
+        application_failed = True
     finally:
+        shutdown_event.set()
         websocket_active = False
 
-        # Cancel all tracked background tasks to prevent memory leaks
-        tasks_to_cancel = list(bg_tasks)
-        for task in tasks_to_cancel:
-            task.cancel()
-        if tasks_to_cancel:
-            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-        bg_tasks.clear()
+        all_to_cancel = [t for t in bg_main_tasks if not t.done()]
+        await drain_tasks(all_to_cancel, timeout=5.0, label="pusher_cleanup", cancel=True)
 
         PUSHER_ACTIVE_WS_CONNECTIONS.dec()
+
+        journey_attempt.finish(pusher_session_outcome(websocket_close_code, application_failed=application_failed))
 
         if websocket.client_state == WebSocketState.CONNECTED:
             try:
@@ -577,5 +886,5 @@ async def websocket_endpoint_trigger(
     websocket: WebSocket,
     uid: str,
     sample_rate: int = 8000,
-):
+) -> None:
     await _websocket_util_trigger(websocket, uid, sample_rate)

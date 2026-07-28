@@ -1,19 +1,19 @@
 import 'package:pigeon/pigeon.dart';
 
-@ConfigurePigeon(PigeonOptions(
-  dartOut: 'lib/gen/pigeon_communicator.g.dart',
-  dartOptions: DartOptions(),
-  swiftOut: 'ios/Runner/PigeonCommunicator.g.swift',
-  swiftOptions: SwiftOptions(),
-  kotlinOut: 'android/app/src/main/kotlin/com/friend/ios/PigeonCommunicator.g.kt',
-  kotlinOptions: KotlinOptions(package: 'com.friend.ios'),
-  dartPackageName: 'omi_pigeon',
-))
-
+@ConfigurePigeon(
+  PigeonOptions(
+    dartOut: 'lib/gen/pigeon_communicator.g.dart',
+    dartOptions: DartOptions(),
+    swiftOut: 'ios/Runner/PigeonCommunicator.g.swift',
+    swiftOptions: SwiftOptions(),
+    kotlinOut: 'android/app/src/main/kotlin/com/friend/ios/PigeonCommunicator.g.kt',
+    kotlinOptions: KotlinOptions(package: 'com.friend.ios'),
+    dartPackageName: 'omi_pigeon',
+  ),
+)
 // =============================================================================
 // Watch Recorder APIs
 // =============================================================================
-
 @HostApi()
 abstract class WatchRecorderHostAPI {
   @SwiftFunction('startRecording()')
@@ -71,12 +71,7 @@ class BlePeripheral {
   final int rssi;
   final List<String> serviceUuids;
 
-  BlePeripheral({
-    required this.uuid,
-    required this.name,
-    required this.rssi,
-    required this.serviceUuids,
-  });
+  BlePeripheral({required this.uuid, required this.name, required this.rssi, required this.serviceUuids});
 }
 
 /// Discovered BLE service with its characteristic UUIDs.
@@ -94,12 +89,53 @@ class BleDisconnectEvent {
   final int reasonCode;
   final bool isManual;
 
+  /// Kind of event: "disconnect" (link lost after connect) or "fail_to_connect"
+  /// (connect attempt never established). Defaults to "disconnect" for legacy records.
+  final String eventType;
+
+  /// Last RSSI sample captured before this event (dBm). 0 if unknown.
+  final int lastRssi;
+
+  /// How long the link was established before this event (ms). 0 if unknown
+  /// or for fail_to_connect events.
+  final int connectionDurationMs;
+
+  /// App lifecycle state at the moment of the event: "foreground", "background",
+  /// or "inactive" (iOS transitioning). Empty string if unknown.
+  final String appState;
+
+  /// ms between this disconnect and the subsequent successful reconnect.
+  /// 0 while the device has not yet reconnected.
+  final int timeToReconnectMs;
+
+  /// RSSI trajectory over the ~15s before this event. One of:
+  ///   "fading"  — signal declined ≥10 dB before the drop (walk-away)
+  ///   "sudden"  — signal stable then link died (interference/stall/device off)
+  ///   "gap"     — no recent RSSI samples (keep-alive wasn't running)
+  ///   "unknown" — insufficient samples to classify
+  /// Empty string on legacy records written before this field existed.
+  final String rssiTrend;
+
   BleDisconnectEvent({
     required this.timestamp,
     required this.reason,
     required this.reasonCode,
     required this.isManual,
+    required this.eventType,
+    required this.lastRssi,
+    required this.connectionDurationMs,
+    required this.appState,
+    required this.timeToReconnectMs,
+    required this.rssiTrend,
   });
+}
+
+/// A single battery level reading persisted by the native BLE layer.
+class BleBatteryPoint {
+  final int timestamp;
+  final int level;
+
+  BleBatteryPoint({required this.timestamp, required this.level});
 }
 
 /// Diagnostics data read from native preferences on demand.
@@ -108,10 +144,15 @@ class BleDeviceDiagnostics {
   final int reconnectionCount;
   final int connectedAt;
 
+  /// Count of connect attempts that never reached didConnect. Surfaces the
+  /// silent-failure path separately from established-then-dropped disconnects.
+  final int failToConnectCount;
+
   BleDeviceDiagnostics({
     required this.disconnectHistory,
     required this.reconnectionCount,
     required this.connectedAt,
+    required this.failToConnectCount,
   });
 }
 
@@ -153,6 +194,12 @@ abstract class BleHostApi {
   @SwiftFunction('getBluetoothState()')
   String getBluetoothState();
 
+  /// (Android only) Show the system "enable Bluetooth" prompt. Resolves to true
+  /// once Bluetooth is on. No-op on iOS — returns whether the adapter is powered on.
+  @async
+  @SwiftFunction('enableBluetooth()')
+  bool enableBluetooth();
+
   @SwiftFunction('isPeripheralConnected(uuid:)')
   bool isPeripheralConnected(String uuid);
 
@@ -166,6 +213,10 @@ abstract class BleHostApi {
   @async
   @SwiftFunction('getDeviceDiagnostics(uuid:)')
   BleDeviceDiagnostics getDeviceDiagnostics(String uuid);
+
+  @async
+  @SwiftFunction('getBatteryHistory(uuid:)')
+  List<BleBatteryPoint> getBatteryHistory(String uuid);
 
   /// (Android only) Check if any CompanionDeviceManager association exists.
   @SwiftFunction('hasCompanionDeviceAssociation()')
@@ -197,4 +248,131 @@ abstract class BleFlutterApi {
   void onRssiUpdate(String peripheralUuid, int rssi);
 
   void onStateRestored(List<String> peripheralUuids);
+
+  /// Native batch writer finalized a recording file (rotation / gap / stop) so
+  /// Dart can rescan the recordings dir without waiting for a disconnect.
+  void onBatchRecordingFinalized(String fileName);
+}
+
+// =============================================================================
+// Ray-Ban Meta (Meta Wearables Device Access Toolkit) APIs
+// =============================================================================
+
+/// A pair of Ray-Ban Meta glasses reported by the Meta Wearables toolkit.
+class RayBanMetaGlasses {
+  final String id;
+  final String name;
+
+  RayBanMetaGlasses({required this.id, required this.name});
+}
+
+/// A Bluetooth Hands-Free Profile input exposed by iOS.
+class BluetoothHfpInput {
+  final String uid;
+  final String name;
+
+  BluetoothHfpInput({required this.uid, required this.name});
+}
+
+/// Dart → native. Camera/photo capture goes through the Meta Wearables Device
+/// Access Toolkit (DAT); the toolkit has no microphone API, so audio capture
+/// uses the platform Bluetooth HFP route as Meta's docs prescribe. All methods
+/// are safe to call on builds without the DAT SDK — getAvailabilityMode()
+/// reports which mode this build supports.
+@HostApi()
+abstract class RayBanMetaHostAPI {
+  /// 'full' (DAT SDK linked + Meta app credentials configured),
+  /// 'audio_only' (no DAT — platform Bluetooth audio route only), or 'none'.
+  @SwiftFunction('getAvailabilityMode()')
+  String getAvailabilityMode();
+
+  @SwiftFunction('initialize()')
+  void initialize();
+
+  /// 'unregistered' | 'registering' | 'registered' ('unavailable' without DAT).
+  @SwiftFunction('getRegistrationState()')
+  String getRegistrationState();
+
+  /// Launches the Meta AI companion app to authorize this app for the glasses.
+  @SwiftFunction('startRegistration()')
+  void startRegistration();
+
+  @SwiftFunction('unregister()')
+  void unregister();
+
+  @async
+  @SwiftFunction('getAvailableGlasses()')
+  List<RayBanMetaGlasses> getAvailableGlasses();
+
+  @SwiftFunction('connect(deviceId:)')
+  void connect(String deviceId);
+
+  @SwiftFunction('disconnect()')
+  void disconnect();
+
+  /// 'disconnected' | 'connecting' | 'connected'.
+  @SwiftFunction('getConnectionState()')
+  String getConnectionState();
+
+  /// DAT camera permission for the glasses: resolves 'granted' | 'denied'.
+  @async
+  @SwiftFunction('requestCameraPermission()')
+  String requestCameraPermission();
+
+  /// 'granted' | 'denied' | 'not_determined' | 'unavailable'.
+  @async
+  @SwiftFunction('getCameraPermissionStatus()')
+  String getCameraPermissionStatus();
+
+  /// Starts capturing the glasses microphone over the Bluetooth HFP route and
+  /// streaming PCM16 mono frames to RayBanMetaFlutterAPI.onAudioFrame.
+  @SwiftFunction('startAudioCapture(inputUid:)')
+  void startAudioCapture(String? inputUid);
+
+  @SwiftFunction('stopAudioCapture()')
+  void stopAudioCapture();
+
+  /// True when the active audio input route is the glasses' Bluetooth HFP mic.
+  @SwiftFunction('isGlassesAudioRouteActive()')
+  bool isGlassesAudioRouteActive();
+
+  /// Bluetooth HFP input ports currently available, for the audio-only
+  /// fallback when the DAT SDK is not part of this build. The UID is the
+  /// stable identity; the user-visible name may change.
+  @SwiftFunction('getBluetoothHfpInputs()')
+  List<BluetoothHfpInput> getBluetoothHfpInputs();
+
+  /// Starts the DAT camera stream session so photo capture is ready. While
+  /// active the glasses' capture LED is on (hardware-enforced by Meta).
+  @SwiftFunction('startCamera()')
+  void startCamera();
+
+  @SwiftFunction('stopCamera()')
+  void stopCamera();
+
+  /// Captures one photo; result arrives via RayBanMetaFlutterAPI.onPhotoCaptured.
+  @SwiftFunction('capturePhoto()')
+  void capturePhoto();
+}
+
+/// Native → Dart events for Ray-Ban Meta.
+@FlutterApi()
+abstract class RayBanMetaFlutterAPI {
+  void onRegistrationStateChanged(String state);
+  void onGlassesDiscovered(RayBanMetaGlasses glasses);
+  void onConnectionStateChanged(String deviceId, String state);
+
+  /// PCM16 little-endian mono audio at [sampleRate] Hz from the glasses mic.
+  void onAudioFrame(Uint8List pcm16Frame, double sampleRate);
+
+  /// Whether the glasses' HFP mic is the active input route right now.
+  void onAudioRouteChanged(bool glassesRouteActive);
+
+  /// JPEG bytes plus clockwise orientation in degrees (0/90/180/270).
+  void onPhotoCaptured(Uint8List jpegBytes, int orientationDegrees);
+
+  /// 'stopped' | 'starting' | 'streaming' | 'paused'.
+  void onCameraStateChanged(String state);
+  void onCameraPermissionChanged(String status);
+  void onError(String code, String message);
 }

@@ -1,3 +1,4 @@
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -6,7 +7,6 @@ import 'package:omi/widgets/shimmer_with_timeout.dart';
 
 import 'package:omi/backend/schema/app.dart';
 import 'package:omi/providers/app_provider.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 
 // Custom notification class to communicate with parent widgets
@@ -35,7 +35,7 @@ class PopularAppsSection extends StatelessWidget {
       children: [
         // Section header - Apple style
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
           child: Row(
             children: [
               Text(
@@ -77,7 +77,7 @@ class PopularAppsSection extends StatelessWidget {
 
                 appProvider.filterApps();
 
-                MixpanelManager().pageOpened('App Detail');
+                PlatformManager.instance.analytics.pageOpened('App Detail');
 
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
@@ -96,7 +96,7 @@ class PopularAppsSection extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1F1F25).withOpacity(0.3),
+                  color: const Color(0xFF1F1F25).withValues(alpha: 0.3),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Row(
@@ -107,7 +107,8 @@ class PopularAppsSection extends StatelessWidget {
                       child: Container(
                         width: 60,
                         height: 60,
-                        decoration: BoxDecoration(color: Color(0xFF35343B), borderRadius: BorderRadius.circular(12)),
+                        decoration:
+                            BoxDecoration(color: const Color(0xFF35343B), borderRadius: BorderRadius.circular(12)),
                         child: CachedNetworkImage(
                           imageUrl: app.getImageUrl(),
                           httpHeaders: const {
@@ -156,7 +157,7 @@ class PopularAppsSection extends StatelessWidget {
                             const SizedBox(height: 4),
                             Row(
                               children: [
-                                Icon(Icons.star_rounded, color: Color(0xFF8B5CF6), size: 14),
+                                const Icon(Icons.star_rounded, color: Color(0xFF8B5CF6), size: 14),
                                 const SizedBox(width: 4),
                                 Text(
                                   app.getRatingAvg()!,
@@ -185,12 +186,12 @@ class PopularAppsSection extends StatelessWidget {
                       width: 72,
                       height: 32,
                       decoration: BoxDecoration(
-                        color: app.enabled ? Colors.grey.shade700 : Color(0xFF8B5CF6),
+                        color: app.enabled ? Colors.grey.shade700 : const Color(0xFF8B5CF6),
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: Center(
                         child: Text(
-                          app.enabled ? context.l10n.open : context.l10n.getButton,
+                          app.enabled ? context.l10n.open : 'Enable',
                           style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white),
                         ),
                       ),

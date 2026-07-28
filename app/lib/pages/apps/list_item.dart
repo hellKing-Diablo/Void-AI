@@ -1,3 +1,4 @@
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -6,7 +7,6 @@ import 'package:omi/widgets/shimmer_with_timeout.dart';
 
 import 'package:omi/backend/schema/app.dart';
 import 'package:omi/providers/app_provider.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/other/temp.dart';
 import 'package:omi/widgets/dialog.dart';
 import 'package:omi/widgets/extensions/string.dart';
@@ -35,25 +35,25 @@ class AppListItem extends StatelessWidget {
       builder: (context, state, child) {
         return GestureDetector(
           onTap: () async {
-            MixpanelManager().pageOpened('App Detail');
+            PlatformManager.instance.analytics.pageOpened('App Detail');
             await routeToPage(context, AppDetailPage(app: app));
           },
           child: Container(
             padding: const EdgeInsets.all(16),
             margin: EdgeInsets.only(bottom: 8, top: index == 0 ? 16 : 0),
             decoration: BoxDecoration(
-              color: const Color(0xFF1F1F25).withOpacity(0.3),
+              color: const Color(0xFF1F1F25).withValues(alpha: 0.3),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Row(
               children: [
-                // App icon - Apple style square with rounded corners
+                // App icon
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: Container(
                     width: 60,
                     height: 60,
-                    decoration: BoxDecoration(color: Color(0xFF35343B), borderRadius: BorderRadius.circular(12)),
+                    decoration: BoxDecoration(color: const Color(0xFF35343B), borderRadius: BorderRadius.circular(12)),
                     child: CachedNetworkImage(
                       imageUrl: app.getImageUrl(),
                       httpHeaders: const {
@@ -80,7 +80,7 @@ class AppListItem extends StatelessWidget {
 
                 const SizedBox(width: 16),
 
-                // App details - Apple style
+                // App details
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -102,7 +102,7 @@ class AppListItem extends StatelessWidget {
                         const SizedBox(height: 4),
                         Row(
                           children: [
-                            Icon(Icons.star_rounded, color: Color(0xFF8B5CF6), size: 14),
+                            const Icon(Icons.star_rounded, color: Color(0xFF8B5CF6), size: 14),
                             const SizedBox(width: 4),
                             Text(
                               app.getRatingAvg()!,
@@ -119,7 +119,7 @@ class AppListItem extends StatelessWidget {
 
                 const SizedBox(width: 12),
 
-                // Action button - Apple style
+                // Action button
                 state.isLoading
                     ? Container(
                         width: 72,
@@ -140,7 +140,7 @@ class AppListItem extends StatelessWidget {
                         onTap: () {
                           if (state.enabled) {
                             // App is enabled, open app detail
-                            MixpanelManager().pageOpened('App Detail');
+                            PlatformManager.instance.analytics.pageOpened('App Detail');
                             routeToPage(context, AppDetailPage(app: app));
                             return;
                           }
@@ -171,12 +171,12 @@ class AppListItem extends StatelessWidget {
                           width: 72,
                           height: 32,
                           decoration: BoxDecoration(
-                            color: state.enabled ? Colors.grey.shade700 : Color(0xFF8B5CF6),
+                            color: state.enabled ? Colors.grey.shade700 : const Color(0xFF8B5CF6),
                             borderRadius: BorderRadius.circular(16),
                           ),
                           child: Center(
                             child: Text(
-                              state.enabled ? 'Open' : 'Get',
+                              state.enabled ? 'Open' : 'Enable',
                               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white),
                             ),
                           ),

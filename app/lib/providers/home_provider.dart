@@ -1,3 +1,4 @@
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 
 import 'package:omi/backend/http/api/speech_profile.dart';
@@ -6,34 +7,10 @@ import 'package:omi/backend/preferences.dart';
 import 'package:omi/app_globals.dart';
 import 'package:omi/pages/settings/language_selection_dialog.dart';
 import 'package:omi/providers/user_provider.dart';
-import 'package:omi/utils/analytics/analytics_manager.dart';
 import 'package:omi/utils/logger.dart';
 
-/// Languages supported by Deepgram Nova-3 multi-language auto-detection.
-/// When a user picks one of these, multi-language mode is enabled (single_language_mode = false).
-const multiLanguageSupported = {
-  'en',
-  'en-US',
-  'en-AU',
-  'en-GB',
-  'en-IN',
-  'en-NZ',
-  'es',
-  'es-419',
-  'fr',
-  'fr-CA',
-  'de',
-  'hi',
-  'ru',
-  'pt',
-  'pt-BR',
-  'pt-PT',
-  'ja',
-  'it',
-  'nl',
-};
-
 class HomeProvider extends ChangeNotifier {
+  int _sessionGeneration = 0;
   int selectedIndex = 0;
   Function(int idx)? onSelectedIndexChanged;
   final FocusNode chatFieldFocusNode = FocusNode();
@@ -72,11 +49,16 @@ class HomeProvider extends ChangeNotifier {
     'Japanese': 'ja',
     'German': 'de',
     // Other languages alphabetically
+    'Arabic': 'ar',
+    'Belarusian': 'be',
+    'Bengali': 'bn',
+    'Bosnian': 'bs',
     'Bulgarian': 'bg',
     'Catalan': 'ca',
     'Chinese (Mandarin, Traditional)': 'zh-TW',
     'Chinese (Mandarin, Traditional, Hant)': 'zh-Hant',
     'Chinese (Cantonese, Traditional)': 'zh-HK',
+    'Croatian': 'hr',
     'Czech': 'cs',
     'Danish': 'da',
     'Danish (Denmark)': 'da-DK',
@@ -88,24 +70,35 @@ class HomeProvider extends ChangeNotifier {
     'French (Canada)': 'fr-CA',
     'German (Switzerland)': 'de-CH',
     'Greek': 'el',
+    'Hebrew': 'he',
     'Hungarian': 'hu',
     'Indonesian': 'id',
     'Italian': 'it',
+    'Kannada': 'kn',
     'Korean': 'ko',
     'Korean (Korea)': 'ko-KR',
     'Latvian': 'lv',
     'Lithuanian': 'lt',
+    'Macedonian': 'mk',
     'Malay': 'ms',
+    'Marathi': 'mr',
     'Norwegian': 'no',
+    'Persian': 'fa',
     'Polish': 'pl',
     'Romanian': 'ro',
+    'Serbian': 'sr',
     'Slovak': 'sk',
+    'Slovenian': 'sl',
     'Swedish': 'sv',
     'Swedish (Sweden)': 'sv-SE',
+    'Tagalog': 'tl',
+    'Tamil': 'ta',
+    'Telugu': 'te',
     'Thai': 'th',
     'Thai (Thailand)': 'th-TH',
     'Turkish': 'tr',
     'Ukrainian': 'uk',
+    'Urdu': 'ur',
     'Vietnamese': 'vi',
   };
 
@@ -114,6 +107,25 @@ class HomeProvider extends ChangeNotifier {
     appsSearchFieldFocusNode.addListener(_onFocusChange);
     convoSearchFieldFocusNode.addListener(_onConvoSearchFocusChange);
     memoriesSearchFieldFocusNode.addListener(_onFocusChange);
+  }
+
+  void clearUserData() {
+    _sessionGeneration++;
+    selectedIndex = 0;
+    isAppsSearchFieldFocused = false;
+    isChatFieldFocused = false;
+    isConvoSearchFieldFocused = false;
+    isMemoriesSearchFieldFocused = false;
+    showConvoSearchBar = false;
+    hasSpeakerProfile = false;
+    isLoading = false;
+    userPrimaryLanguage = '';
+    hasSetPrimaryLanguage = false;
+    chatFieldFocusNode.unfocus();
+    appsSearchFieldFocusNode.unfocus();
+    convoSearchFieldFocusNode.unfocus();
+    memoriesSearchFieldFocusNode.unfocus();
+    notifyListeners();
   }
 
   void _onFocusChange() {
@@ -170,12 +182,14 @@ class HomeProvider extends ChangeNotifier {
   }
 
   Future setupHasSpeakerProfile() async {
+    final generation = _sessionGeneration;
     setIsLoading(true);
     var res = await userHasSpeakerProfile();
+    if (generation != _sessionGeneration) return;
     setSpeakerProfile(res);
     SharedPreferencesUtil().hasSpeakerProfile = res;
     Logger.debug('_setupHasSpeakerProfile: ${SharedPreferencesUtil().hasSpeakerProfile}');
-    AnalyticsManager().setUserAttribute('Speaker Profile', SharedPreferencesUtil().hasSpeakerProfile);
+    PlatformManager.instance.analytics.setUserAttribute('Speaker Profile', SharedPreferencesUtil().hasSpeakerProfile);
 
     setIsLoading(false);
     notifyListeners();
@@ -186,8 +200,10 @@ class HomeProvider extends ChangeNotifier {
       return;
     }
 
+    final generation = _sessionGeneration;
     try {
       final language = await getUserPrimaryLanguage();
+      if (generation != _sessionGeneration) return;
       if (language == null) {
         // User hasn't set a primary language yet
         userPrimaryLanguage = '';
@@ -195,7 +211,7 @@ class HomeProvider extends ChangeNotifier {
 
         // Show language dialog after a short delay to ensure UI is ready
         Future.delayed(const Duration(milliseconds: 500), () {
-          if (globalNavigatorKey.currentContext != null) {
+          if (generation == _sessionGeneration && globalNavigatorKey.currentContext != null) {
             showLanguageDialogIfNeeded(globalNavigatorKey.currentContext!);
           }
         });
@@ -204,10 +220,11 @@ class HomeProvider extends ChangeNotifier {
         hasSetPrimaryLanguage = true;
         SharedPreferencesUtil().userPrimaryLanguage = language;
         SharedPreferencesUtil().hasSetPrimaryLanguage = true;
-        AnalyticsManager().setUserAttribute('Primary Language', language);
+        PlatformManager.instance.analytics.setUserAttribute('Primary Language', language);
       }
       Logger.debug('setupUserPrimaryLanguage: $language, hasSet: $hasSetPrimaryLanguage');
     } catch (e) {
+      if (generation != _sessionGeneration) return;
       Logger.debug('Error setting up user primary language: $e');
       userPrimaryLanguage = '';
       hasSetPrimaryLanguage = false;
@@ -224,17 +241,17 @@ class HomeProvider extends ChangeNotifier {
 
   Future<bool> updateUserPrimaryLanguage(String languageCode, {UserProvider? userProvider}) async {
     try {
-      final success = await setUserPrimaryLanguage(languageCode);
-      if (success) {
+      final serverSingleLanguageMode = await setUserPrimaryLanguage(languageCode);
+      if (serverSingleLanguageMode != null) {
         userPrimaryLanguage = languageCode;
         hasSetPrimaryLanguage = true;
         SharedPreferencesUtil().userPrimaryLanguage = languageCode;
         SharedPreferencesUtil().hasSetPrimaryLanguage = true;
-        AnalyticsManager().setUserAttribute('Primary Language', languageCode);
+        PlatformManager.instance.analytics.setUserAttribute('Primary Language', languageCode);
 
-        // Backend auto-sets single_language_mode — sync local state to match
-        final singleLanguageMode = !multiLanguageSupported.contains(languageCode);
-        userProvider?.updateSingleLanguageModeLocally(singleLanguageMode);
+        // The server decides single_language_mode from the live STT policy
+        // (#10022); local state mirrors its response, never a client-side list.
+        userProvider?.updateSingleLanguageModeLocally(serverSingleLanguageMode);
 
         notifyListeners();
         return true;

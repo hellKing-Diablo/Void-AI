@@ -3,10 +3,11 @@ import logging
 import os
 from typing import Optional
 
-import requests
+import httpx
 
 from database.redis_db import r
-from models.conversation import Geolocation
+from models.geolocation import Geolocation
+from utils.http_client import get_maps_client, get_maps_semaphore
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +30,15 @@ def get_google_maps_location(latitude: float, longitude: float) -> Optional[Geol
 
     key = os.getenv('GOOGLE_MAPS_API_KEY')
     url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={latitude},{longitude}&key={key}"
-    response = requests.get(url)
-    data = response.json()
-    if data['status'] != 'OK' or not data.get('results'):
+    try:
+        response = httpx.get(url)
+        data = response.json()
+    except Exception as e:
+        # Transport failure (timeout/connect) or a non-JSON body (e.g. a Google 5xx HTML error page).
+        # Return None like the async twin instead of 500ing conversation create/finalize.
+        logger.error(f'get_google_maps_location error: {e}')
+        return None
+    if data.get('status') != 'OK' or not data.get('results'):
         return None
     place = data['results'][0]
     if not place.get('place_id'):
@@ -52,3 +59,86 @@ def get_google_maps_location(latitude: float, longitude: float) -> Optional[Geol
         logging.warning('Failed to cache geocode for key %s: %s', cache_key, e)
 
     return geo
+
+
+def resolve_geolocation(geolocation: Optional[Geolocation]) -> Optional[Geolocation]:
+    """Enrich a raw geolocation via Google Places, keeping the original coordinates when the lookup
+    misses (returns None) or errors, so a geocode miss/failure never drops the user's location.
+
+    Only a geolocation that has coordinates but no google_place_id yet is enriched; anything else is
+    returned unchanged. Callers should assign the return value once (do not overwrite it afterward).
+    """
+    if not geolocation or geolocation.google_place_id:
+        return geolocation
+    try:
+        enriched = get_google_maps_location(geolocation.latitude, geolocation.longitude)
+    except Exception as e:
+        logger.error('resolve_geolocation enrichment failed: %s', e)
+        return geolocation
+    return enriched or geolocation
+
+
+async def async_get_google_maps_location(latitude: float, longitude: float) -> Optional[Geolocation]:
+    """Async version of get_google_maps_location using httpx.AsyncClient."""
+    logger.info(f'async_get_google_maps_location {latitude} {longitude}')
+
+    # Round to ~100m precision for cache key
+    rounded = f"{latitude:.3f},{longitude:.3f}"
+    cache_key = f"geocode:{rounded}"
+
+    # Check Redis cache
+    try:
+        cached = r.get(cache_key)
+        if cached:
+            data = json.loads(cached)
+            return Geolocation(**data)
+    except Exception as e:
+        logging.warning('Failed to read geocode cache for key %s: %s', cache_key, e)
+
+    key = os.getenv('GOOGLE_MAPS_API_KEY')
+    try:
+        async with get_maps_semaphore():
+            client = get_maps_client()
+            response = await client.get(
+                "https://maps.googleapis.com/maps/api/geocode/json",
+                params={"latlng": f"{latitude},{longitude}", "key": key},
+            )
+            data = response.json()
+    except Exception as e:
+        logger.error(f'async_get_google_maps_location error: {e}')
+        return None
+
+    if data.get('status') != 'OK' or not data.get('results'):
+        return None
+    place = data['results'][0]
+    if not place.get('place_id'):
+        return None
+
+    geo = Geolocation(
+        google_place_id=place['place_id'],
+        latitude=latitude,
+        longitude=longitude,
+        address=place.get('formatted_address'),
+        location_type=place['types'][0] if place.get('types') else None,
+    )
+
+    # Cache in Redis (48h TTL)
+    try:
+        r.set(cache_key, json.dumps(geo.model_dump()), ex=172800)
+    except Exception as e:
+        logging.warning('Failed to cache geocode for key %s: %s', cache_key, e)
+
+    return geo
+
+
+async def async_resolve_geolocation(geolocation: Optional[Geolocation]) -> Optional[Geolocation]:
+    """Async variant of resolve_geolocation: enrich via async_get_google_maps_location, keeping the
+    original coordinates when the lookup misses (returns None) or errors."""
+    if not geolocation or geolocation.google_place_id:
+        return geolocation
+    try:
+        enriched = await async_get_google_maps_location(geolocation.latitude, geolocation.longitude)
+    except Exception as e:
+        logger.error('async_resolve_geolocation enrichment failed: %s', e)
+        return geolocation
+    return enriched or geolocation

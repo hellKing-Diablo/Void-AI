@@ -1,28 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAdmin } from '@/lib/auth';
 import type Stripe from 'stripe';
-import { getStripe } from '@/lib/stripe';
+import { getOptionalStripe } from '@/lib/stripe';
+import { getPayload, setPayload } from '@/lib/payload-cache';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 3600;
 
-export async function GET(request: NextRequest) {
-  const authResult = await verifyAdmin(request);
-  if (authResult instanceof NextResponse) return authResult;
+function cacheKey(months: number): string {
+  return `mrr-trends:v1:${months}`;
+}
 
-  const stripe = getStripe();
-  try {
+export { cacheKey as mrrTrendsCacheKey };
+
+// Thrown when every Stripe leg fails — GET maps it to a 502.
+class AllSourcesFailedError extends Error {}
+
+function buildEmptyMrrData(months: number) {
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setMonth(startDate.getMonth() - months);
+
+  const monthKeys: string[] = [];
+  const currentDate = new Date(startDate);
+  while (currentDate <= endDate) {
+    const monthKey = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+    monthKeys.push(monthKey);
+    currentDate.setMonth(currentDate.getMonth() + 1);
+  }
+
+  return monthKeys.map((monthKey) => {
+    const [year, month] = monthKey.split('-');
+    const date = new Date(parseInt(year), parseInt(month) - 1);
+    return {
+      month: date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+      monthKey,
+      mrr: 0,
+    };
+  });
+}
+
+export async function computeMrrTrends(months: number) {
+    const stripe = getOptionalStripe();
     const monthlyPriceId = process.env.STRIPE_UNLIMITED_MONTHLY_PRICE_ID;
     const annualPriceId = process.env.STRIPE_UNLIMITED_ANNUAL_PRICE_ID;
 
-    if (!monthlyPriceId || !annualPriceId) {
-      return NextResponse.json(
-        { error: 'Stripe price IDs not configured' },
-        { status: 500 }
-      );
+    if (!stripe || !monthlyPriceId || !annualPriceId) {
+      return { data: buildEmptyMrrData(months), unavailable: true };
     }
-
-    // Get query params for date range (default to last 12 months)
-    const searchParams = request.nextUrl.searchParams;
-    const months = parseInt(searchParams.get('months') || '12', 10);
 
     // Calculate date range
     const endDate = new Date();
@@ -58,10 +82,24 @@ export async function GET(request: NextRequest) {
       return allSubscriptions;
     };
 
-    const [monthlySubscriptions, annualSubscriptions] = await Promise.all([
+    const results = await Promise.allSettled([
       fetchAllSubscriptions(monthlyPriceId),
       fetchAllSubscriptions(annualPriceId),
     ]);
+
+    const monthlySubscriptions = results[0].status === 'fulfilled' ? results[0].value : [];
+    const annualSubscriptions = results[1].status === 'fulfilled' ? results[1].value : [];
+
+    if (results[0].status === 'rejected') {
+      console.error('Error fetching monthly subscriptions for MRR:', results[0].reason);
+    }
+    if (results[1].status === 'rejected') {
+      console.error('Error fetching annual subscriptions for MRR:', results[1].reason);
+    }
+
+    if (results.every((r) => r.status === 'rejected')) {
+      throw new AllSourcesFailedError('All MRR trend data sources failed');
+    }
 
     // Group MRR by month
     const mrrByMonth: Record<string, number> = {};
@@ -134,6 +172,7 @@ export async function GET(request: NextRequest) {
     });
 
     // Format data for chart
+    const partial = results.some((r) => r.status === 'rejected');
     const data = monthKeys.map((monthKey) => {
       const [year, month] = monthKey.split('-');
       const date = new Date(parseInt(year), parseInt(month) - 1);
@@ -144,8 +183,30 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    return NextResponse.json({ data });
+    return { data, partial };
+}
+
+export async function GET(request: NextRequest) {
+  const authResult = await verifyAdmin(request);
+  if (authResult instanceof NextResponse) return authResult;
+
+  try {
+    const searchParams = request.nextUrl.searchParams;
+    const months = parseInt(searchParams.get('months') || '12', 10);
+    const key = cacheKey(months);
+
+    const cached = await getPayload<Awaited<ReturnType<typeof computeMrrTrends>>>(key);
+    if (cached) {
+      return NextResponse.json(cached.data);
+    }
+
+    const payload = await computeMrrTrends(months);
+    await setPayload(key, payload);
+    return NextResponse.json(payload);
   } catch (error) {
+    if (error instanceof AllSourcesFailedError) {
+      return NextResponse.json({ error: error.message }, { status: 502 });
+    }
     console.error('Error fetching MRR trends:', error);
     return NextResponse.json(
       { error: 'Failed to fetch MRR trends' },
@@ -153,4 +214,3 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-

@@ -1,46 +1,194 @@
-# Void AI: Academic Edge-Computing Ecosystem
+<div align="center">
 
-**Founder & Lead Engineer:** Yagnik Vanodiya  
-**Status:** Active Prototype / Backend Stable
+# **omi**
 
-## The Vision
-Void AI is not a generic life-logger. It is a stealth, high-performance edge-computing ecosystem engineered specifically for academia. 
+### A 2nd brain you trust more than your 1st
 
-Modern university lectures are dense, complex, and fast-paced. Existing AI recorders are optimized for corporate meeting action items. Void AI solves the academic bottleneck by acting as a continuous real-time lecture parser. It streams audio via Bluetooth Low Energy (BLE) to a custom-built processing pipeline, leveraging multimodal LLMs to dynamically generate structured study guides, extract core formulas, and build a searchable vector-database of a student's entire semester.
+Omi captures your screen and conversations, transcribes in real-time, generates summaries and action items, and gives you an AI chat that remembers everything you've seen and heard. Works on desktop, phone and wearables. Fully open source.
 
-*Note: This project builds upon the robust open-source Omi architecture, but the core infrastructure has been completely decoupled, overridden, and re-engineered with a proprietary backend and custom data schemas to support our academic focus.*
+Trusted by 300,000+ professionals.
 
-## Core Architecture & Tech Stack
 
-Void AI operates on a distributed microservices architecture, spanning from bare-metal hardware to cloud-based AI generation.
+[![Discord](https://img.shields.io/discord/1192313062041067520?label=Discord&logo=discord&logoColor=white&style=for-the-badge)](http://discord.omi.me)&ensp;
+[![GitHub Repo stars](https://img.shields.io/github/stars/BasedHardware/Omi?style=for-the-badge)](https://github.com/BasedHardware/Omi)&ensp;
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-**1. The Hardware (The Edge)**
-* **Current Iteration:** ESP32-S3 with I2S microphones transmitting continuous audio chunks via BLE protocols.
-* **Next Phase:** Custom-routed, miniaturized printed circuit boards (PCBs) designed in KiCad for optimal power efficiency and form factor.
-* **Future Expansion:** Multi-sensor spatial analytics integration (e.g., BME680 environmental sensors and mmWave radar) for complete room occupancy and contextual environment tracking.
+[Website](https://omi.me/) · [Docs](https://docs.omi.me/) · [Discord](http://discord.omi.me) · [Twitter](https://x.com/kodjima33) · [DeepWiki](https://deepwiki.com/BasedHardware/omi)
 
-**2. The Client (The Interface)**
-* **Framework:** Flutter / Dart (Cross-platform)
-* **State Management:** Optimized for high-frequency WebSocket streams to prevent Out-Of-Memory (OOM) compiler crashes during continuous lecture recording.
+</div>
 
-**3. The Backend (The Brain)**
-* **Server:** Python FastAPI deployed on a native Linux environment, securely tunneled via Ngrok for rapid local development.
-* **Speech-to-Text:** Real-time streaming integration with Deepgram.
-* **AI Agent Pipeline:** OpenAI integrations orchestrated via LangGraph for contextual memory extraction and RAG (Retrieval-Augmented Generation).
+## Quick Start
 
-**4. The Database (The Memory)**
-* **Primary Store:** Firebase Firestore with manually built composite indexes for rapid, complex query filtering.
-* **Caching layer:** Upstash TCP database with SSL encryption enabled (replacing default Redis configs to prevent silent 500 internal server errors).
-* **Vector Search:** Pinecone database for semantic retrieval of lecture concepts.
+### macOS
 
-## Recent Engineering Milestones
-- [x] Successfully bypassed upstream Linux C++ Out-Of-Memory compilation errors for the Flutter client.
-- [x] Decoupled upstream cloud dependencies, rerouting authentication and database logic to a proprietary Google Cloud / Firebase instance.
-- [x] Resolved hidden streaming errors by configuring custom Firestore composite indexes for AI memory retrieval.
-- [x] Stabilized the complete RAG text pipeline: Flutter → FastAPI → Upstash → Pinecone → OpenAI.
+```sh
+git clone https://github.com/BasedHardware/omi.git && cd omi/desktop/macos && ./run.sh --yolo
+```
 
-## Local Development (Isolation Strategy)
-To prevent merge conflicts with upstream open-source branches, Void AI employs a strict Isolation Strategy. The `main` branch acts as a clean upstream mirror, while all proprietary logic, UI overhauls, and backend overrides are engineered and maintained in `void-ai-main` and dedicated feature branches.
+Builds the macOS app, connects to the cloud backend, and launches. No env files, no credentials, no local backend.
 
----
-*Building the ultimate cheat code for the modern classroom.*
+> **Requirements:** macOS 14+, [Xcode](https://developer.apple.com/xcode/) (includes Swift & code signing), [Node.js](https://nodejs.org/)
+
+### Windows
+
+```powershell
+git clone https://github.com/BasedHardware/omi.git
+cd omi\desktop\windows
+npm install
+copy .env.example .env
+npm run dev
+```
+
+Starts the Windows desktop app from source using the public config in `.env.example`.
+
+> **Requirements:** [Node.js](https://nodejs.org/)
+
+For development worktrees, run the baseline local setup once. It installs the Git hooks and syncs the pinned backend Python environment used by selected pre-push checks; mobile and desktop runtime environments remain opt-in.
+
+```bash
+make setup
+```
+
+<details>
+  <summary>Full Installation</summary>
+  
+For local development with the full backend stack:
+
+1. Install prerequisites
+
+```bash
+xcode-select --install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+2. Clone and configure
+
+```bash
+git clone https://github.com/BasedHardware/omi.git
+cd omi/desktop/macos
+cp Backend-Rust/.env.example Backend-Rust/.env
+```
+
+3. Build and run
+
+```bash
+./run.sh
+```
+
+See [desktop/macos/README.md](desktop/macos/README.md) for environment variables and credential setup.
+
+
+### Mobile App
+
+```bash
+cd app && bash setup.sh ios    # or: bash setup.sh android
+```
+
+</details>
+
+<p align="center">
+  <a href="https://macos.omi.me"><img src="docs/assets/readme/download-macos-badge.png" alt="Download for macOS" height="50"></a>
+  <a href="https://apps.apple.com/us/app/friend-ai-wearable/id6502156163"><img src="docs/assets/readme/download-appstore-badge.png" alt="Download on the App Store" height="50"></a>
+  <a href="https://play.google.com/store/apps/details?id=com.friend.ios"><img src="docs/assets/readme/download-gplay-badge.png" alt="Get it on Google Play" height="50"></a>
+</p>
+
+<p align="center">
+  <a href="https://app.omi.me">Try in Browser</a>
+</p>
+
+<details>
+  <summary>How it works</summary>
+
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                      Your Devices                       │
+│                                                         │
+│  ┌──────────┐  ┌──────────────┐  ┌───────────────────┐  │
+│  │ Omi      │  │ macOS App    │  │ Mobile App        │  │
+│  │ Wearable │  │ (Swift/Rust) │  │ (Flutter)         │  │
+│  └────┬─────┘  └──────┬───────┘  └────────┬──────────┘  │
+│       │    BLE         │   HTTPS/WS        │             │
+└───────┼────────────────┼───────────────────┼─────────────┘
+        │                │                   │
+        ▼                ▼                   ▼
+┌─────────────────────────────────────────────────────────┐
+│                    Omi Backend (Python)                  │
+│                                                         │
+│  ┌─────────┐  ┌──────────┐  ┌─────────┐  ┌──────────┐  │
+│  │ Listen  │  │ Pusher   │  │ VAD     │  │ Diarizer │  │
+│  │ (REST)  │  │ (WS)     │  │ (GPU)   │  │ (GPU)    │  │
+│  └─────────┘  └──────────┘  └─────────┘  └──────────┘  │
+│                                                         │
+│  ┌─────────┐  ┌──────────┐  ┌─────────┐  ┌──────────┐  │
+│  │ Deepgram│  │ Firestore│  │ Redis   │  │ LLMs     │  │
+│  │ (STT)   │  │ (DB)     │  │ (Cache) │  │ (AI)     │  │
+│  └─────────┘  └──────────┘  └─────────┘  └──────────┘  │
+└─────────────────────────────────────────────────────────┘
+```
+
+| Component | Path | Stack |
+|-----------|------|-------|
+| **macOS app** | [`desktop/macos/`](desktop/macos/) | Swift, SwiftUI, Rust backend |
+| Mobile app | [`app/`](app/) | Flutter (iOS & Android) |
+| Backend API | [`backend/`](backend/) | Python, FastAPI, Firebase |
+| Firmware | [`omi/`](omi/) | nRF, Zephyr, C |
+| Omi Glass | [`omiGlass/`](omiGlass/) | ESP32-S3, C |
+| SDKs | [`sdks/`](sdks/) | React Native, Swift, Python |
+| AI Personas | [`web/personas-open-source/`](web/personas-open-source/) | Next.js |
+
+</details>
+
+## Documentation
+
+### Getting Started
+- [Introduction](https://docs.omi.me/)
+- [Quick Start Guide](https://docs.omi.me/quickstart)
+- [macOS App Development](desktop/macos/README.md)
+- [Mobile App Setup](https://docs.omi.me/doc/developer/AppSetup)
+- [Backend Setup](https://docs.omi.me/doc/developer/backend/Backend_Setup)
+- [Contributing](https://docs.omi.me/doc/developer/Contribution) — also [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`PRODUCT.md`](PRODUCT.md)
+
+### Building Apps
+- [App Development Guide](https://docs.omi.me/doc/developer/apps/Introduction)
+- [Example Apps](https://docs.omi.me/doc/developer/apps/examples/Github) — GitHub, Slack, OmiMentor
+- [Audio Streaming Apps](https://docs.omi.me/doc/developer/apps/AudioStreaming)
+- [Custom Chat Tools](https://docs.omi.me/doc/developer/apps/ChatTools)
+- [Submit to App Store](https://docs.omi.me/doc/developer/apps/Submitting)
+
+### API & SDKs
+- [API Reference](https://docs.omi.me/api-reference/introduction) — REST endpoints for memories, conversations, action items
+- [Python SDK](sdks/python/)
+- [Swift SDK](sdks/swift/)
+- [React Native SDK](sdks/react-native/)
+- [MCP Server](mcp/) — Model Context Protocol integration
+
+### Architecture
+- [Backend Deep Dive](https://docs.omi.me/doc/developer/backend/backend_deepdive)
+- [Transcription Pipeline](https://docs.omi.me/doc/developer/backend/transcription)
+- [Chat System](https://docs.omi.me/doc/developer/backend/chat_system)
+- [Audio Streaming Pipeline](https://docs.omi.me/doc/developer/backend/listen_pusher_pipeline)
+- [BLE Protocol](https://docs.omi.me/doc/developer/Protocol)
+
+## Omi Hardware
+![Omi](https://github.com/user-attachments/assets/7a658366-9e02-4057-bde5-a510e1f0217a)
+
+Open-source AI wearables that pair with the mobile app for 24h+ continuous capture.
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/834d3fdb-31b5-4f22-ae35-da3d2b9a8f59" alt="Omi Wearable" width="49%" />
+  <img src="https://github.com/user-attachments/assets/fdad4226-e5ce-4c55-b547-9101edfa3203" alt="Omi Glass" width="49%" />
+</p>
+
+- [Buy Omi](https://www.omi.me/pages/product)
+- [Buy Omi Glass Dev Kit](https://www.omi.me/glass) — ESP32-S3, camera + audio
+- [Open Source Hardware Designs](https://docs.omi.me/doc/hardware/consumer/electronics)
+- [Buying Guide](https://docs.omi.me/doc/assembly/Buying_Guide)
+- [Build the Device](https://docs.omi.me/doc/assembly/Build_the_device)
+- [Flash Firmware](https://docs.omi.me/doc/get_started/Flash_device)
+- [Integrate Your Wearable](https://docs.omi.me/doc/integrations)
+- [Hardware Specs](https://docs.omi.me/doc/hardware/DevKit2)
+
+## License
+
+MIT — see [LICENSE](LICENSE)

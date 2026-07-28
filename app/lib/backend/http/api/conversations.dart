@@ -1,11 +1,28 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:omi/backend/http/shared.dart';
+import 'package:omi/backend/schema/gen/action_items_folders_wire.g.dart' as action_items_wire;
+import 'package:omi/backend/schema/gen/apps_wire.g.dart' as apps_wire;
+import 'package:omi/backend/schema/gen/conversation_wire.g.dart' as wire;
 import 'package:omi/backend/schema/schema.dart';
 import 'package:omi/env/env.dart';
+import 'package:omi/utils/debug_log_manager.dart';
 import 'package:omi/utils/logger.dart';
 import 'package:omi/utils/platform/platform_manager.dart';
+
+/// Whether a non-200 response from POST /v1/conversations (process in-progress
+/// conversation) is a benign race rather than a failure worth crash-reporting.
+///
+/// The backend returns 404 when there is no in-progress conversation to
+/// process — which happens when the WS auto-finalize path already consumed the
+/// in-progress conversation and cleared its Redis pointer before this
+/// client-initiated create ran. Nothing to recover; the conversation is
+/// already finalized. Reporting it floods crash reporting with noise.
+bool isBenignInProgressConversationCreateStatus(int statusCode) => statusCode == 404;
 
 Future<CreateConversationResponse?> processInProgressConversation() async {
   var response = await makeApiCall(
@@ -17,9 +34,10 @@ Future<CreateConversationResponse?> processInProgressConversation() async {
   if (response == null) return null;
   Logger.debug('createConversationServer: ${response.body}');
   if (response.statusCode == 200) {
-    return CreateConversationResponse.fromJson(jsonDecode(response.body));
+    return CreateConversationResponse.fromGeneratedWireJson(jsonDecode(response.body) as Map<String, dynamic>);
+  } else if (isBenignInProgressConversationCreateStatus(response.statusCode)) {
+    Logger.debug('processInProgressConversation: no in-progress conversation (already finalized), skipping');
   } else {
-    // TODO: Server returns 304 doesn't recover
     PlatformManager.instance.crashReporter.reportCrash(
       Exception('Failed to create conversation'),
       StackTrace.current,
@@ -30,6 +48,33 @@ Future<CreateConversationResponse?> processInProgressConversation() async {
 }
 
 Future<List<ServerConversation>> getConversations({
+  int limit = 50,
+  int offset = 0,
+  List<ConversationStatus> statuses = const [],
+  bool includeDiscarded = true,
+  DateTime? startDate,
+  DateTime? endDate,
+  String? folderId,
+  bool? starred,
+}) async {
+  final result = await getConversationsResult(
+    limit: limit,
+    offset: offset,
+    statuses: statuses,
+    includeDiscarded: includeDiscarded,
+    startDate: startDate,
+    endDate: endDate,
+    folderId: folderId,
+    starred: starred,
+  );
+  return result.items;
+}
+
+// Same as [getConversations] but reports whether the request actually
+// succeeded. An empty `items` with `ok == false` means the fetch failed
+// (no response / non-200, e.g. auth token not ready right after a cold
+// start) — which callers must NOT treat as "the user has no conversations".
+Future<({List<ServerConversation> items, bool ok})> getConversationsResult({
   int limit = 50,
   int offset = 0,
   List<ConversationStatus> statuses = const [],
@@ -57,18 +102,18 @@ Future<List<ServerConversation>> getConversations({
   }
 
   var response = await makeApiCall(url: url, headers: {}, method: 'GET', body: '');
-  if (response == null) return [];
+  if (response == null) return (items: <ServerConversation>[], ok: false);
   if (response.statusCode == 200) {
     // decode body bytes to utf8 string and then parse json so as to avoid utf8 char issues
     var body = utf8.decode(response.bodyBytes);
-    var memories =
-        (jsonDecode(body) as List<dynamic>).map((conversation) => ServerConversation.fromJson(conversation)).toList();
+    var memories = (jsonDecode(body) as List<dynamic>)
+        .map((conversation) => ServerConversation.fromJson(conversation as Map<String, dynamic>))
+        .toList();
     Logger.debug('getConversations length: ${memories.length}');
-    return memories;
-  } else {
-    Logger.debug('getConversations error ${response.statusCode}');
+    return (items: memories, ok: true);
   }
-  return [];
+  Logger.debug('getConversations error ${response.statusCode}');
+  return (items: <ServerConversation>[], ok: false);
 }
 
 Future<ServerConversation?> reProcessConversationServer(String conversationId, {String? appId}) async {
@@ -81,7 +126,7 @@ Future<ServerConversation?> reProcessConversationServer(String conversationId, {
   if (response == null) return null;
   Logger.debug('reProcessConversationServer: ${response.body}');
   if (response.statusCode == 200) {
-    return ServerConversation.fromJson(jsonDecode(response.body));
+    return ServerConversation.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
   }
   return null;
 }
@@ -98,6 +143,95 @@ Future<bool> deleteConversationServer(String conversationId) async {
   return response.statusCode == 204;
 }
 
+Future<bool> unlinkCalendarEvent(String conversationId) async {
+  var response = await makeApiCall(
+    url: '${Env.apiBaseUrl}v1/conversations/$conversationId/calendar-event',
+    headers: {},
+    method: 'DELETE',
+    body: '',
+  );
+  if (response == null) return false;
+  return response.statusCode == 200;
+}
+
+/// Link a specific Google Calendar event to a conversation.
+/// Returns the linked CalendarEventLink if successful, null otherwise.
+Future<CalendarEventLink?> linkCalendarEvent(String conversationId, String eventId) async {
+  var response = await makeApiCall(
+    url: '${Env.apiBaseUrl}v1/conversations/$conversationId/calendar-event',
+    headers: {},
+    method: 'POST',
+    body: jsonEncode({'event_id': eventId}),
+  );
+  if (response == null) return null;
+  if (response.statusCode == 200) {
+    return CalendarEventLink.fromGenerated(
+      wire.GeneratedCalendarEventLink.fromJson(jsonDecode(response.body) as Map<String, dynamic>),
+    );
+  }
+  debugPrint('linkCalendarEvent error: ${response.statusCode} - ${response.body}');
+  return null;
+}
+
+/// Auto-link a conversation to the best overlapping Google Calendar event.
+/// Returns the linked CalendarEventLink if found, null otherwise.
+Future<CalendarEventLink?> autoLinkCalendarEvent(String conversationId) async {
+  var response = await makeApiCall(
+    url: '${Env.apiBaseUrl}v1/conversations/$conversationId/calendar-event/auto-link',
+    headers: {},
+    method: 'POST',
+    body: '',
+  );
+  if (response == null) return null;
+  if (response.statusCode == 200) {
+    return CalendarEventLink.fromGenerated(
+      wire.GeneratedCalendarEventLink.fromJson(jsonDecode(response.body) as Map<String, dynamic>),
+    );
+  }
+  // 404 means no overlapping event found - not an error, just no match
+  if (response.statusCode == 404) {
+    debugPrint('autoLinkCalendarEvent: No overlapping calendar event found');
+    return null;
+  }
+  debugPrint('autoLinkCalendarEvent error: ${response.statusCode} - ${response.body}');
+  return null;
+}
+
+/// List Google Calendar events within a time range for the event picker.
+/// Returns a list of CalendarEventLink objects, or empty list on error.
+Future<List<CalendarEventLink>> listGoogleCalendarEvents({
+  DateTime? timeMin,
+  DateTime? timeMax,
+  String? query,
+  int maxResults = 20,
+}) async {
+  String url = '${Env.apiBaseUrl}v1/calendar/google/events?max_results=$maxResults';
+
+  if (timeMin != null) {
+    url += '&time_min=${timeMin.toUtc().toIso8601String()}';
+  }
+  if (timeMax != null) {
+    url += '&time_max=${timeMax.toUtc().toIso8601String()}';
+  }
+  if (query != null && query.isNotEmpty) {
+    url += '&q=${Uri.encodeComponent(query)}';
+  }
+
+  var response = await makeApiCall(url: url, headers: {}, method: 'GET', body: '');
+  if (response == null) return [];
+  if (response.statusCode == 200) {
+    var body = utf8.decode(response.bodyBytes);
+    return (jsonDecode(body) as List<dynamic>)
+        .map(
+          (event) =>
+              CalendarEventLink.fromGenerated(wire.GeneratedCalendarEventLink.fromJson(event as Map<String, dynamic>)),
+        )
+        .toList();
+  }
+  debugPrint('listGoogleCalendarEvents error: ${response.statusCode} - ${response.body}');
+  return [];
+}
+
 Future<ServerConversation?> getConversationById(String conversationId) async {
   var response = await makeApiCall(
     url: '${Env.apiBaseUrl}v1/conversations/$conversationId',
@@ -107,7 +241,7 @@ Future<ServerConversation?> getConversationById(String conversationId) async {
   );
   if (response == null) return null;
   if (response.statusCode == 200) {
-    return ServerConversation.fromJson(jsonDecode(response.body));
+    return ServerConversation.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
   } else if (response.statusCode == 402) {
     Logger.debug('Unlimited Plan Required for conversation: $conversationId');
     return null;
@@ -138,19 +272,15 @@ Future<bool> updateConversationSegmentText(String conversationId, String segment
   return response.statusCode == 200;
 }
 
-Future<List<ConversationPhoto>> getConversationPhotos(String conversationId) async {
+Future<bool> updateConversationSummary(String conversationId, String? appId, String content) async {
   var response = await makeApiCall(
-    url: '${Env.apiBaseUrl}v1/conversations/$conversationId/photos',
-    headers: {},
-    method: 'GET',
-    body: '',
+    url: '${Env.apiBaseUrl}v1/conversations/$conversationId/summary',
+    headers: {'Content-Type': 'application/json'},
+    method: 'PATCH',
+    body: jsonEncode({'app_id': appId, 'content': content}),
   );
-  if (response == null) return [];
-  Logger.debug('getConversationPhotos: ${response.body}');
-  if (response.statusCode == 200) {
-    return (jsonDecode(response.body) as List<dynamic>).map((photo) => ConversationPhoto.fromJson(photo)).toList();
-  }
-  return [];
+  if (response == null) return false;
+  return response.statusCode == 200;
 }
 
 class TranscriptsResponse {
@@ -167,12 +297,27 @@ class TranscriptsResponse {
   });
 
   factory TranscriptsResponse.fromJson(Map<String, dynamic> json) {
+    return TranscriptsResponse.fromGeneratedWireJson(json);
+  }
+
+  factory TranscriptsResponse.fromGeneratedWireJson(Map<String, dynamic> json) {
+    List<TranscriptSegment> readSegments(String key) {
+      final segments = json[key];
+      if (segments is! List) return [];
+      return segments
+          .map(
+            (segment) => TranscriptSegment.fromGenerated(
+              wire.GeneratedTranscriptSegment.fromJson(segment as Map<String, dynamic>),
+            ),
+          )
+          .toList();
+    }
+
     return TranscriptsResponse(
-      deepgram: (json['deepgram'] as List<dynamic>).map((segment) => TranscriptSegment.fromJson(segment)).toList(),
-      soniox: (json['soniox'] as List<dynamic>).map((segment) => TranscriptSegment.fromJson(segment)).toList(),
-      whisperx: (json['whisperx'] as List<dynamic>).map((segment) => TranscriptSegment.fromJson(segment)).toList(),
-      speechmatics:
-          (json['speechmatics'] as List<dynamic>).map((segment) => TranscriptSegment.fromJson(segment)).toList(),
+      deepgram: readSegments('deepgram'),
+      soniox: readSegments('soniox'),
+      whisperx: readSegments('whisperx'),
+      speechmatics: readSegments('speechmatics'),
     );
   }
 }
@@ -187,25 +332,9 @@ Future<TranscriptsResponse> getConversationTranscripts(String conversationId) as
   if (response == null) return TranscriptsResponse();
   Logger.debug('getConversationTranscripts: ${response.body}');
   if (response.statusCode == 200) {
-    var transcripts = (jsonDecode(response.body) as Map<String, dynamic>);
-    return TranscriptsResponse.fromJson(transcripts);
+    return TranscriptsResponse.fromGeneratedWireJson(jsonDecode(response.body) as Map<String, dynamic>);
   }
   return TranscriptsResponse();
-}
-
-Future<bool> hasConversationRecording(String conversationId) async {
-  var response = await makeApiCall(
-    url: '${Env.apiBaseUrl}v1/conversations/$conversationId/recording',
-    headers: {},
-    method: 'GET',
-    body: '',
-  );
-  if (response == null) return false;
-  Logger.debug('hasConversationRecording: ${response.body}');
-  if (response.statusCode == 200) {
-    return jsonDecode(response.body)['has_recording'] ?? false;
-  }
-  return false;
 }
 
 Future<bool> assignBulkConversationTranscriptSegments(
@@ -259,21 +388,7 @@ Future<bool> setConversationStarred(String conversationId, bool starred) async {
   return response.statusCode == 200;
 }
 
-Future<bool> setConversationEventsState(String conversationId, List<int> eventsIdx, List<bool> values) async {
-  print(jsonEncode({'events_idx': eventsIdx, 'values': values}));
-  var response = await makeApiCall(
-    url: '${Env.apiBaseUrl}v1/conversations/$conversationId/events',
-    headers: {},
-    method: 'PATCH',
-    body: jsonEncode({'events_idx': eventsIdx, 'values': values}),
-  );
-  if (response == null) return false;
-  Logger.debug('setConversationEventsState: ${response.body}');
-  return response.statusCode == 200;
-}
-
 Future<bool> setConversationActionItemState(String conversationId, List<int> actionItemsIdx, List<bool> values) async {
-  print(jsonEncode({'items_idx': actionItemsIdx, 'values': values, 'conversation_id': conversationId}));
   var response = await makeApiCall(
     url: '${Env.apiBaseUrl}v1/conversations/$conversationId/action-items',
     headers: {},
@@ -315,170 +430,236 @@ Future<bool> deleteConversationActionItem(String conversationId, ActionItem item
   return response.statusCode == 204;
 }
 
-//this is expected to return complete memories
-Future<List<ServerConversation>> sendStorageToBackend(File file, String sdCardDateTimeString) async {
-  try {
-    var response = await makeMultipartApiCall(
-      url: '${Env.apiBaseUrl}sdcard_memory?date_time=$sdCardDateTimeString',
-      files: [file],
-      fileFieldName: 'file',
-    );
+/// Outcome of an upload-only POST to /v2/sync-local-files.
+/// Exactly one of [jobId] (HTTP 202 — audio received, processing in the
+/// background; reconcile later) or [completed] (HTTP 200 fast-path — server
+/// already returned the result synchronously) is non-null.
+class UploadFilesResult {
+  final String? jobId;
+  final SyncLocalFilesResponse? completed;
 
-    if (response.statusCode == 200) {
-      Logger.debug('storageSend Response body: ${jsonDecode(response.body)}');
-    } else {
-      Logger.debug('Failed to storageSend. Status code: ${response.statusCode}');
-      return [];
-    }
+  const UploadFilesResult._(this.jobId, this.completed);
+  factory UploadFilesResult.queued(String jobId) => UploadFilesResult._(jobId, null);
+  factory UploadFilesResult.done(SyncLocalFilesResponse result) => UploadFilesResult._(null, result);
 
-    var memories = (jsonDecode(response.body) as List<dynamic>)
-        .map((conversation) => ServerConversation.fromJson(conversation))
-        .toList();
-    Logger.debug('getMemories length: ${memories.length}');
-
-    return memories;
-  } catch (e) {
-    Logger.debug('An error occurred storageSend: $e');
-    return [];
-  }
+  bool get isQueued => jobId != null;
 }
 
-Future<SyncLocalFilesResponse> syncLocalFiles(List<File> files, {UploadProgressCallback? onUploadProgress}) async {
-  try {
-    var response = await makeMultipartApiCall(
-      url: '${Env.apiBaseUrl}v1/sync-local-files',
-      files: files,
-      onUploadProgress: onUploadProgress,
-    );
+/// Server-provided classification for a sync upload HTTP 429.
+///
+/// Fair use is deliberately opt-in: an unknown, proxy-generated, or platform
+/// 429 is backend capacity unless the response carries Omi's explicit reason.
+enum SyncRateLimitKind { fairUse, backfillPaced, backendCapacity }
 
-    if (response.statusCode == 200 || response.statusCode == 207) {
-      var result = SyncLocalFilesResponse.fromJson(jsonDecode(response.body));
-      if (response.statusCode == 207) {
-        Logger.debug(
-          'syncLocalFiles partial failure: ${result.failedSegments}/${result.totalSegments} segments failed, '
-          'errors: ${result.errors}',
-        );
-      } else {
-        Logger.debug('syncLocalFile Response body: ${jsonDecode(response.body)}');
-      }
-      return result;
-    } else if (response.statusCode == 400) {
-      throw Exception('Audio file could not be processed by server');
-    } else if (response.statusCode == 413) {
-      throw Exception('Audio file is too large to upload');
-    } else if (response.statusCode >= 500) {
-      throw Exception('Server is temporarily unavailable');
-    } else {
-      throw Exception('Upload failed unexpectedly');
-    }
-  } catch (e) {
-    Logger.debug('syncLocalFiles error: $e');
-    rethrow;
+enum SyncUploadLane { fresh, backfill }
+
+@visibleForTesting
+bool shouldRequestSyncCaptureManifest(String? conversationId, SyncUploadLane syncLane) =>
+    conversationId != null && syncLane == SyncUploadLane.fresh;
+
+Future<String?> _createSyncCaptureManifest(List<File> files, String conversationId) async {
+  final claims = <Map<String, String>>[];
+  for (final file in files) {
+    final digest = await sha256.bind(file.openRead()).first;
+    claims.add({'name': file.uri.pathSegments.last, 'sha256': digest.toString()});
   }
+  final response = await makeApiCall(
+    url: '${Env.apiBaseUrl}v2/sync-capture-manifest',
+    headers: const {},
+    body: jsonEncode(
+      wire.GeneratedSyncCaptureManifestRequest(
+        conversationId: conversationId,
+        files: [
+          for (final claim in claims)
+            wire.GeneratedSyncCaptureManifestFile(name: claim['name']!, sha256: claim['sha256']!),
+        ],
+      ).toJson(),
+    ),
+    method: 'POST',
+  );
+  if (response?.statusCode != 200) return null;
+  final body = wire.GeneratedSyncCaptureManifestResponse.fromJson(
+    jsonDecode(response!.body) as Map<String, dynamic>,
+  );
+  return body.manifest;
 }
 
-/// v2 async sync: POST files → 202 with job_id, then poll until terminal.
-/// Returns the same SyncLocalFilesResponse as v1 once processing is confirmed complete.
-typedef SyncJobPollCallback = void Function(SyncJobStatusResponse status);
+/// Thrown when a sync upload is rate-limited (HTTP 429).
+/// [retryAfterSeconds] is the server's Retry-After when provided.
+class SyncRateLimitedException implements Exception {
+  final SyncRateLimitKind kind;
+  final int? retryAfterSeconds;
+  SyncRateLimitedException({required this.kind, this.retryAfterSeconds});
 
-Future<SyncLocalFilesResponse> syncLocalFilesV2(
+  @override
+  String toString() => 'SyncRateLimitedException(kind=$kind, retryAfter=$retryAfterSeconds)';
+}
+
+/// A synchronous upload response that durably reached the server but did not
+/// transcribe every segment. Callers keep the local WAL and retry it; the
+/// backend deduplicates any segments that already succeeded.
+class SyncUploadIncompleteException implements Exception {
+  final int failedSegments;
+
+  const SyncUploadIncompleteException(this.failedSegments);
+
+  @override
+  String toString() => 'SyncUploadIncompleteException(failedSegments=$failedSegments)';
+}
+
+@visibleForTesting
+SyncLocalFilesResponse requireCompleteSyncUpload(SyncLocalFilesResponse response) {
+  if (response.hasPartialFailure) {
+    throw SyncUploadIncompleteException(response.failedSegments);
+  }
+  return response;
+}
+
+/// Parse a Retry-After header expressed in delta-seconds. Returns null for an
+/// absent or non-integer (HTTP-date) value; the caller falls back to a default.
+int? _parseRetryAfterSeconds(http.Response response) {
+  final raw = response.headers['retry-after'];
+  if (raw == null) return null;
+  return int.tryParse(raw.trim());
+}
+
+/// Classifies a sync 429 without relying on human-readable error text.
+///
+/// The application-generated restriction response carries this bounded header.
+/// Everything else remains a generic backend-capacity limit.
+SyncRateLimitKind syncRateLimitKindForResponse(http.Response response) {
+  final reason = response.headers['x-omi-rate-limit-reason']?.trim().toLowerCase();
+  if (reason == 'fair_use') {
+    return SyncRateLimitKind.fairUse;
+  }
+  if (reason == 'backfill_paced' || reason == 'backfill_capacity') {
+    return SyncRateLimitKind.backfillPaced;
+  }
+  return SyncRateLimitKind.backendCapacity;
+}
+
+/// Upload-only: POST files and return as soon as the server acknowledges
+/// (HTTP 202 with a job_id, or the 200 fast-path with a finished result).
+/// Does NOT wait for server-side processing — the caller marks the WAL
+/// `uploaded` and a reconciler resolves [jobId] later via [fetchSyncJobStatus].
+/// Error-status mapping matches the old polling path so callers' retry logic
+/// is unchanged.
+Future<UploadFilesResult> uploadLocalFilesV2(
   List<File> files, {
   UploadProgressCallback? onUploadProgress,
-  SyncJobPollCallback? onPollProgress,
   String? conversationId,
+  SyncUploadLane syncLane = SyncUploadLane.fresh,
 }) async {
-  try {
-    // Step 1: Submit files
-    var url = '${Env.apiBaseUrl}v2/sync-local-files';
-    if (conversationId != null) {
-      url += '?conversation_id=${Uri.encodeQueryComponent(conversationId)}';
-    }
-    var response = await makeMultipartApiCall(
-      url: url,
-      files: files,
-      onUploadProgress: onUploadProgress,
-    );
-
-    // Fast-path responses (no async job created)
-    if (response.statusCode == 200) {
-      return SyncLocalFilesResponse.fromJson(jsonDecode(response.body));
-    }
-
-    if (response.statusCode != 202) {
-      if (response.statusCode == 400) {
-        throw Exception('Audio file could not be processed by server');
-      } else if (response.statusCode == 413) {
-        throw Exception('Audio file is too large to upload');
-      } else if (response.statusCode == 429) {
-        throw Exception('Rate limited or budget exhausted');
-      } else if (response.statusCode >= 500) {
-        throw Exception('Server is temporarily unavailable');
-      } else {
-        throw Exception('Upload failed unexpectedly');
-      }
-    }
-
-    // Step 2: Poll for completion
-    var startResponse = SyncJobStartResponse.fromJson(jsonDecode(response.body));
-    var jobId = startResponse.jobId;
-    var pollInterval = Duration(milliseconds: startResponse.pollAfterMs);
-
-    const maxPolls = 120; // 120 x 3s = 6 minutes max
-    for (var i = 0; i < maxPolls; i++) {
-      await Future.delayed(pollInterval);
-
-      var pollResponse = await makeApiCall(
-        url: '${Env.apiBaseUrl}v2/sync-local-files/$jobId',
-        headers: {},
-        method: 'GET',
-        body: '',
+  String? captureManifest;
+  if (shouldRequestSyncCaptureManifest(conversationId, syncLane)) {
+    captureManifest = await _createSyncCaptureManifest(files, conversationId!);
+    if (captureManifest == null) {
+      throw SyncRateLimitedException(
+        kind: SyncRateLimitKind.backfillPaced,
+        retryAfterSeconds: 30,
       );
-
-      if (pollResponse == null) {
-        Logger.debug('syncLocalFilesV2 poll failed: null response');
-        continue; // Retry on transient errors
-      }
-
-      // Terminal errors — don't retry
-      if (pollResponse.statusCode == 404) {
-        throw Exception('Sync job not found or expired');
-      }
-      if (pollResponse.statusCode == 403) {
-        throw Exception('Not authorized to view this sync job');
-      }
-      if (pollResponse.statusCode != 200) {
-        Logger.debug('syncLocalFilesV2 poll failed: ${pollResponse.statusCode}');
-        continue; // Retry on transient errors
-      }
-
-      var jobStatus = SyncJobStatusResponse.fromJson(jsonDecode(pollResponse.body));
-
-      // Report poll progress to caller for UI updates
-      onPollProgress?.call(jobStatus);
-
-      if (jobStatus.isTerminal) {
-        // All segments failed → throw to match v1's 500 behavior (WAL stays retryable)
-        if (jobStatus.status == 'failed') {
-          throw Exception(jobStatus.error ?? 'Sync job failed');
-        }
-        // Success or partial failure → return result
-        if (jobStatus.result != null) {
-          return jobStatus.result!;
-        }
-        return SyncLocalFilesResponse(
-          newConversationIds: [],
-          updatedConversationIds: [],
-          failedSegments: jobStatus.failedSegments,
-          totalSegments: jobStatus.totalSegments,
-        );
-      }
     }
+  }
+  var url = '${Env.apiBaseUrl}v2/sync-local-files';
+  if (conversationId != null) {
+    url += '?conversation_id=${Uri.encodeQueryComponent(conversationId)}';
+  }
+  var response = await makeMultipartApiCall(
+    url: url,
+    files: files,
+    headers: {
+      'X-Omi-Sync-Lane-Hint': syncLane.name,
+      if (captureManifest != null) 'X-Omi-Sync-Capture-Manifest': captureManifest,
+    },
+    onUploadProgress: onUploadProgress,
+  );
 
-    // Polling timed out — don't mark as synced
-    throw Exception('Sync job timed out waiting for results');
+  if (response.statusCode == 200) {
+    // Fast-path: server processed synchronously and returned the result. A
+    // legacy server can still encode partial work in a 200, which must follow
+    // the retry path rather than acknowledging/deleting the local WAL.
+    final completed = SyncLocalFilesResponse.fromGenerated(
+      wire.GeneratedSyncLocalFilesResultResponse.fromJson(jsonDecode(response.body) as Map<String, dynamic>),
+    );
+    return UploadFilesResult.done(
+      requireCompleteSyncUpload(completed),
+    );
+  }
+  if (response.statusCode == 202) {
+    final start = SyncJobStartResponse.fromGenerated(
+      wire.GeneratedSyncJobStartResponse.fromJson(jsonDecode(response.body) as Map<String, dynamic>),
+    );
+    if (start.jobId.isEmpty) {
+      throw Exception('Upload accepted but no job id returned');
+    }
+    return UploadFilesResult.queued(start.jobId);
+  }
+  if (response.statusCode == 400) {
+    throw Exception('Audio file could not be processed by server');
+  } else if (response.statusCode == 413) {
+    throw Exception('Audio file is too large to upload');
+  } else if (response.statusCode == 429 ||
+      (response.statusCode == 503 &&
+          response.headers['x-omi-rate-limit-reason']?.trim().toLowerCase() == 'backfill_capacity')) {
+    throw SyncRateLimitedException(
+      kind: syncRateLimitKindForResponse(response),
+      retryAfterSeconds: _parseRetryAfterSeconds(response),
+    );
+  } else if (response.statusCode >= 500) {
+    throw Exception('Server is temporarily unavailable');
+  }
+  throw Exception('Upload failed unexpectedly');
+}
+
+/// Why a single job-status fetch did not yield a usable status.
+/// - [notFound]  : 404/403 — job expired, unknown, or not ours. Unrecoverable
+///                 for this job_id; the caller must fall back to re-upload.
+/// - [transient] : network/5xx/null — retry later, job may still be alive.
+enum SyncJobFetchOutcome { ok, notFound, transient }
+
+class SyncJobFetch {
+  final SyncJobFetchOutcome outcome;
+  final SyncJobStatusResponse? status;
+  const SyncJobFetch(this.outcome, [this.status]);
+}
+
+/// Single GET of a sync job's status — no polling loop. The reconciler owns
+/// the polling cadence and decides what to do per [SyncJobFetchOutcome].
+Future<SyncJobFetch> fetchSyncJobStatus(String jobId) async {
+  final response = await makeApiCall(
+    url: '${Env.apiBaseUrl}v2/sync-local-files/$jobId',
+    headers: {},
+    method: 'GET',
+    body: '',
+  );
+  if (response == null) {
+    DebugLogManager.logEvent('fetch_sync_job_status', {'jobId': jobId, 'httpStatus': null, 'outcome': 'transient'});
+    return const SyncJobFetch(SyncJobFetchOutcome.transient);
+  }
+  if (response.statusCode == 404 || response.statusCode == 403) {
+    DebugLogManager.logEvent('fetch_sync_job_status', {
+      'jobId': jobId,
+      'httpStatus': response.statusCode,
+      'outcome': 'notFound',
+    });
+    return const SyncJobFetch(SyncJobFetchOutcome.notFound);
+  }
+  if (response.statusCode != 200) {
+    DebugLogManager.logEvent('fetch_sync_job_status', {
+      'jobId': jobId,
+      'httpStatus': response.statusCode,
+      'outcome': 'transient',
+    });
+    return const SyncJobFetch(SyncJobFetchOutcome.transient);
+  }
+  try {
+    return SyncJobFetch(
+      SyncJobFetchOutcome.ok,
+      SyncJobStatusResponse.fromJson(jsonDecode(response.body) as Map<String, dynamic>),
+    );
   } catch (e) {
-    Logger.debug('syncLocalFilesV2 error: $e');
-    rethrow;
+    Logger.debug('fetchSyncJobStatus parse error: $e');
+    return const SyncJobFetch(SyncJobFetchOutcome.transient);
   }
 }
 
@@ -487,6 +668,7 @@ Future<(List<ServerConversation>, int, int)> searchConversationsServer(
   int? page,
   int? limit,
   bool includeDiscarded = true,
+  String? speakerId,
 }) async {
   Logger.debug(Env.apiBaseUrl);
   var response = await makeApiCall(
@@ -498,15 +680,14 @@ Future<(List<ServerConversation>, int, int)> searchConversationsServer(
       'page': page ?? 1,
       'per_page': limit ?? 10,
       'include_discarded': includeDiscarded,
+      if (speakerId != null) 'speaker_id': speakerId,
     }),
   );
   if (response == null) return (<ServerConversation>[], 0, 0);
   if (response.statusCode == 200) {
-    List<dynamic> items = (jsonDecode(response.body))['items'];
-    int currentPage = (jsonDecode(response.body))['current_page'];
-    int totalPages = (jsonDecode(response.body))['total_pages'];
-    var convos = items.map<ServerConversation>((item) => ServerConversation.fromJson(item)).toList();
-    return (convos, currentPage, totalPages);
+    final data = wire.GeneratedSearchConversationsResponse.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    final convos = data.items.map((conversation) => ServerConversation.fromGenerated(conversation)).toList();
+    return (convos, data.currentPage, data.totalPages);
   }
   return (<ServerConversation>[], 0, 0);
 }
@@ -520,7 +701,9 @@ Future<String> testConversationPrompt(String prompt, String conversationId) asyn
   );
   if (response == null) return '';
   if (response.statusCode == 200) {
-    return jsonDecode(response.body)['summary'];
+    return wire.GeneratedConversationTestPromptResponse.fromJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+    ).summary;
   } else {
     return '';
   }
@@ -548,14 +731,14 @@ Future<ActionItemsResponse> getActionItems({
 
   var response = await makeApiCall(url: url, headers: {}, method: 'GET', body: '');
 
-  if (response == null) return ActionItemsResponse(actionItems: [], hasMore: false);
+  if (response == null) return const ActionItemsResponse(actionItems: [], hasMore: false);
 
   if (response.statusCode == 200) {
     var body = utf8.decode(response.bodyBytes);
-    return ActionItemsResponse.fromJson(jsonDecode(body));
+    return action_items_wire.GeneratedActionItemsResponse.fromJson(jsonDecode(body) as Map<String, dynamic>);
   } else {
     Logger.debug('getActionItems error ${response.statusCode}');
-    return ActionItemsResponse(actionItems: [], hasMore: false);
+    return const ActionItemsResponse(actionItems: [], hasMore: false);
   }
 }
 
@@ -570,14 +753,12 @@ Future<List<App>> getConversationSuggestedApps(String conversationId) async {
   if (response == null) return [];
   Logger.debug('getConversationSuggestedApps: ${response.body}');
   if (response.statusCode == 200) {
-    var data = jsonDecode(response.body);
-    return (data['suggested_apps'] as List<dynamic>).map((appData) => App.fromJson(appData)).toList();
+    final data = apps_wire.GeneratedConversationSuggestedAppsResponse.fromJson(
+      jsonDecode(response.body) as Map<String, dynamic>,
+    );
+    return data.suggestedApps.map(App.fromGeneratedDetail).toList();
   }
   return [];
-}
-
-Future<bool> updateActionItemStateByMetadata(String conversationId, int itemIndex, bool newState) async {
-  return await setConversationActionItemState(conversationId, [itemIndex], [newState]);
 }
 
 // *********************************
@@ -599,11 +780,15 @@ class MergeConversationsResponse {
   });
 
   factory MergeConversationsResponse.fromJson(Map<String, dynamic> json) {
+    return MergeConversationsResponse.fromGenerated(wire.GeneratedMergeConversationsResponse.fromJson(json));
+  }
+
+  factory MergeConversationsResponse.fromGenerated(wire.GeneratedMergeConversationsResponse generated) {
     return MergeConversationsResponse(
-      status: json['status'] ?? 'merging',
-      message: json['message'] ?? 'Merge started',
-      warning: json['warning'],
-      conversationIds: List<String>.from(json['conversation_ids'] ?? []),
+      status: generated.status,
+      message: generated.message,
+      warning: generated.warning,
+      conversationIds: generated.conversationIds,
     );
   }
 }
@@ -627,7 +812,9 @@ Future<MergeConversationsResponse?> mergeConversations(List<String> conversation
   Logger.debug('mergeConversations: ${response.body}');
 
   if (response.statusCode == 200) {
-    return MergeConversationsResponse.fromJson(jsonDecode(response.body));
+    return MergeConversationsResponse.fromGenerated(
+      wire.GeneratedMergeConversationsResponse.fromJson(jsonDecode(response.body) as Map<String, dynamic>),
+    );
   } else {
     Logger.debug('mergeConversations error: ${response.statusCode} - ${response.body}');
     return null;

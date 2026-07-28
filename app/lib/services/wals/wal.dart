@@ -4,16 +4,43 @@ import 'package:omi/backend/schema/bt_device/bt_device.dart';
 
 const chunkSizeInSeconds = 60;
 const flushIntervalInSeconds = 90;
-const sdcardChunkSizeSecs = 60;
+const sdcardChunkSizeSecs = 180;
 const newFrameSyncDelaySeconds = 15;
 const framesPerFlashPage = 8;
 const secondsPerFlashPage = 1.4;
 
-enum WalStatus { inProgress, miss, synced, corrupted }
+/// Sync lifecycle of a recording.
+///
+/// - [inProgress] — still being written (audio is live).
+/// - [miss]       — finalized locally, not yet uploaded (or reverted to retry).
+/// - [uploaded]   — audio safely received by the server (HTTP 202); the server
+///                  job is processing. NOT yet confirmed and NOT deletable —
+///                  the local file is retained until [synced]. A reconciler
+///                  resolves the job_id to [synced] / [miss] / [corrupted].
+/// - [synced]     — server job confirmed success; conversation created. Safe to clean up.
+/// - [corrupted]  — the underlying local file is missing/unreadable.
+enum WalStatus { inProgress, miss, uploaded, synced, corrupted }
 
 enum WalStorage { mem, disk, sdcard, flashPage }
 
-enum SyncMethod { ble, wifi }
+enum SyncMethod { ble }
+
+/// User-facing sync state for a single recording, derived from [Wal.status],
+/// [Wal.isSyncing] and [Wal.retryCount]. This is what the sync UI renders so a
+/// recording is never shown as an indistinct row — every state is explicit.
+///
+/// - [syncing]    — actively uploading right now
+/// - [uploaded]   — uploaded; processing on Omi's servers (will finish in the background)
+/// - [synced]     — safely backed up to the cloud
+/// - [waiting]    — recorded, never attempted yet (will sync automatically)
+/// - [retrying]   — a sync attempt failed; will be retried automatically
+/// - [failed]     — auto-retries exhausted; needs a manual retry
+/// - [corrupted]  — the underlying file is missing/unreadable
+enum WalSyncDisplayState { syncing, uploaded, synced, waiting, retrying, failed, corrupted }
+
+/// Max automatic sync attempts before a recording is considered [WalSyncDisplayState.failed].
+/// Mirrors the `maxRetries` used by the auto-sync loop in capture_provider.
+const int walMaxAutoRetries = 3;
 
 class WalStats {
   final int totalFiles;
@@ -68,7 +95,7 @@ class Wal {
   WalStorage storage;
 
   String? filePath;
-  List<List<int>> data = [];
+  List<List<int>> data;
   int storageOffset = 0;
   int storageTotalBytes = 0;
   int fileNum = 1;
@@ -86,7 +113,59 @@ class Wal {
 
   WalStorage? originalStorage;
 
+  /// The conversation this WAL belongs to. Stamped when ConversationProcessingStartedEvent
+  /// arrives so WALs survive app kill and can be recovered on startup.
+  String? conversationId;
+
+  /// Number of sync retry attempts for this WAL.
+  int retryCount;
+
+  /// Unix timestamp (seconds) of the last sync retry attempt.
+  int lastRetryAt;
+
+  /// Server job id assigned when this recording's audio was uploaded (HTTP 202).
+  /// The reconciler polls this to resolve [WalStatus.uploaded] → synced / miss /
+  /// corrupted. Null until uploaded. Multiple WALs in one upload batch share it.
+  String? jobId;
+
+  /// Unix timestamp (seconds) when the audio was uploaded (202 received).
+  int uploadedAt;
+
   String get id => '${device}_$timerStart';
+
+  /// Single source of truth for how this recording's sync state is shown to the
+  /// user. The sync page renders an explicit label + icon for every value so a
+  /// not-yet-synced recording is never visually identical to a failed one.
+  WalSyncDisplayState get syncDisplayState {
+    // Corruption is terminal. It must not be visually downgraded to an active
+    // upload if a transient flag was left behind by an interrupted attempt.
+    if (status == WalStatus.corrupted) return WalSyncDisplayState.corrupted;
+    if (isSyncing) return WalSyncDisplayState.syncing;
+    switch (status) {
+      case WalStatus.uploaded:
+        return WalSyncDisplayState.uploaded;
+      case WalStatus.synced:
+        return WalSyncDisplayState.synced;
+      case WalStatus.corrupted:
+        return WalSyncDisplayState.corrupted;
+      case WalStatus.miss:
+        if (retryCount >= walMaxAutoRetries) return WalSyncDisplayState.failed;
+        if (retryCount > 0) return WalSyncDisplayState.retrying;
+        return WalSyncDisplayState.waiting;
+      case WalStatus.inProgress:
+        return WalSyncDisplayState.waiting;
+    }
+  }
+
+  /// Marks this recording as terminally unavailable and clears any transient
+  /// upload presentation left by an interrupted attempt.
+  void markCorrupted() {
+    status = WalStatus.corrupted;
+    isSyncing = false;
+    syncStartedAt = null;
+    syncEtaSeconds = null;
+    syncSpeedKBps = null;
+  }
 
   Wal({
     required this.timerStart,
@@ -102,11 +181,16 @@ class Wal {
     this.storageOffset = 0,
     this.storageTotalBytes = 0,
     this.fileNum = 1,
-    this.data = const [],
+    List<List<int>>? data,
     this.totalFrames = 0,
     this.syncedFrameOffset = 0,
     this.originalStorage,
-  }) {
+    this.conversationId,
+    this.retryCount = 0,
+    this.lastRetryAt = 0,
+    this.jobId,
+    this.uploadedAt = 0,
+  }) : data = data ?? [] {
     frameSize = codec.getFrameSize();
   }
 
@@ -127,9 +211,13 @@ class Wal {
       fileNum: json['file_num'] ?? 1,
       totalFrames: json['total_frames'] ?? 0,
       syncedFrameOffset: json['synced_frame_offset'] ?? 0,
-      originalStorage: json['original_storage'] != null
-          ? WalStorage.values.asNameMap()[json['original_storage']]
-          : null,
+      originalStorage:
+          json['original_storage'] != null ? WalStorage.values.asNameMap()[json['original_storage']] : null,
+      conversationId: json['conversation_id'],
+      retryCount: json['retry_count'] ?? 0,
+      lastRetryAt: json['last_retry_at'] ?? 0,
+      jobId: json['job_id'],
+      uploadedAt: json['uploaded_at'] ?? 0,
     );
   }
 
@@ -151,6 +239,11 @@ class Wal {
       'total_frames': totalFrames,
       'synced_frame_offset': syncedFrameOffset,
       'original_storage': originalStorage?.name,
+      'conversation_id': conversationId,
+      'retry_count': retryCount,
+      'last_retry_at': lastRetryAt,
+      'job_id': jobId,
+      'uploaded_at': uploadedAt,
     };
   }
 

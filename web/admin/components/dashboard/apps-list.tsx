@@ -52,6 +52,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { OmiApp, OmiAppCapability } from "@/lib/services/omi-api/types";
 import { useAuth } from "@/components/auth-provider";
+import { useAuthFetch } from "@/hooks/useAuthToken";
 import { mutate } from "swr";
 import { useRouter } from 'next/navigation';
 import EditAppDrawer from '@/components/dashboard/edit-app-drawer';
@@ -89,6 +90,7 @@ export function AppsList({
 }: AppsListProps) {
   const [loadingActions, setLoadingActions] = useState<Record<string, boolean>>({});
   const { user } = useAuth();
+  const { fetchWithAuth } = useAuthFetch();
   const [editOpen, setEditOpen] = useState(false);
   const [editApp, setEditApp] = useState<OmiApp | null>(null);
   
@@ -140,13 +142,8 @@ export function AppsList({
     setLoadingActions(prev => ({ ...prev, [appId]: true }));
 
     try {
-      const idToken = await user.getIdToken();
-      const response = await fetch(`/api/omi/apps/${appId}/review`, {
+      const response = await fetchWithAuth(`/api/omi/apps/${appId}/review`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${idToken}`,
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({ action }),
       });
 
@@ -363,10 +360,10 @@ export function AppsList({
                         </TableCell>
                         {!minimal && (
                              <TableCell>
-                              {app.rating_avg > 0 ? (
+                              {(app.rating_avg ?? 0) > 0 ? (
                                 <div className="flex items-center gap-1">
                                   <Star className="h-4 w-4 fill-primary text-primary" />
-                                  {app.rating_avg.toFixed(1)}
+                                  {(app.rating_avg ?? 0).toFixed(1)}
                                 </div>
                               ) : (
                                 <span className="text-xs text-muted-foreground">No rating</span>
@@ -385,7 +382,7 @@ export function AppsList({
                   <TableCell>
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
                         <Calendar className="h-3.5 w-3.5" />
-                        {new Date(app.created_at).toLocaleDateString()}
+                        {new Date(app.created_at ?? 0).toLocaleDateString()}
                       </div>
                     </TableCell>
                 )}

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -7,7 +8,6 @@ import 'package:provider/provider.dart';
 
 import 'package:omi/providers/capture_provider.dart';
 import 'package:omi/providers/user_provider.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 
 class CustomVocabularyPage extends StatefulWidget {
@@ -181,7 +181,7 @@ class _CustomVocabularyPageState extends State<CustomVocabularyPage> {
                           child: Container(
                             padding: const EdgeInsets.all(4),
                             decoration: BoxDecoration(
-                              color: Colors.grey.shade700.withOpacity(0.5),
+                              color: Colors.grey.shade700.withValues(alpha: 0.5),
                               shape: BoxShape.circle,
                             ),
                             child: Icon(
@@ -214,7 +214,7 @@ class _CustomVocabularyPageState extends State<CustomVocabularyPage> {
     _vocabularyController.clear();
 
     final success = await userProvider.addVocabularyWords(words);
-    if (success && context.mounted) {
+    if (success && mounted) {
       context.read<CaptureProvider>().onTranscriptionSettingsChanged();
     }
   }
@@ -260,7 +260,7 @@ class _CustomVocabularyPageState extends State<CustomVocabularyPage> {
 
   @override
   Widget build(BuildContext context) {
-    MixpanelManager().pageOpened('Custom Vocabulary');
+    PlatformManager.instance.analytics.pageOpened('Custom Vocabulary');
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),

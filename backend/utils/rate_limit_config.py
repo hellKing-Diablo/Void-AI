@@ -25,7 +25,7 @@ import os
 # ---------------------------------------------------------------------------
 
 RATE_LIMIT_BOOST: float = float(os.getenv("RATE_LIMIT_BOOST", "1.0"))
-RATE_LIMIT_SHADOW: bool = os.getenv("RATE_LIMIT_SHADOW_MODE", "false").lower() != "false"
+RATE_LIMIT_SHADOW: bool = os.getenv("RATE_LIMIT_SHADOW_MODE", "false").lower() == "true"
 
 # ---------------------------------------------------------------------------
 # Policies: "name" -> (max_requests, window_seconds)
@@ -39,6 +39,10 @@ RATE_POLICIES: dict[str, tuple[int, int]] = {
     "conversations:create": (10, 3600),
     "conversations:reprocess": (3, 3600),
     "conversations:merge": (5, 3600),
+    # From-segments: on-device-STT upload path (segments already transcribed, so
+    # cheaper than :create — no Deepgram, just LLM structuring). Used per finished
+    # conversation by Parakeet/local-STT users, so a bit more headroom than :create.
+    "conversations:from-segments": (30, 3600),
     # Chat — 2-6 LLM calls per message
     "chat:send_message": (120, 3600),
     "chat:initial": (60, 3600),
@@ -52,9 +56,35 @@ RATE_POLICIES: dict[str, tuple[int, int]] = {
     # Platform tools — backend RAG endpoints
     "tools:search": (60, 3600),
     "tools:mutate": (60, 3600),
-    "mcp:sse": (200, 3600),
+    # MCP transport POSTs (initialize/tools-list/tool-calls) are cheap reads, but
+    # one user often runs many concurrent MCP clients (multiple IDE/agent sessions)
+    # under a single account, and clients reconnect in bursts. A tight cap here turns
+    # a reconnect storm into a 429 death-spiral, so this is sized for heavy multi-session
+    # use rather than a single client. Tune via RATE_LIMIT_BOOST for events.
+    "mcp:sse": (2000, 3600),
+    # Action items — lightweight Firestore writes from MCP clients (no LLM), but
+    # an agent can loop, so cap creation per hour. Complete/update/delete operate
+    # on existing tasks and ride the shared mcp:sse / per-request auth limits.
+    "action_items:write": (120, 3600),
     # Memories — single LLM call each
     "memories:create": (60, 3600),
+    # Memory batch writes — each request can create up to 100 memories, so the
+    # per-request cap is intentionally tighter than memories:create.
+    "memories:batch": (30, 3600),
+    # Memory import ingest writes source artifacts only; candidate extraction is
+    # server-owned and rate-limited separately by worker scheduling.
+    "memory_imports:batch": (60, 3600),
+    # Memory mutations — lightweight Firestore writes
+    "memories:modify": (120, 3600),
+    # Memory review queue — lightweight read/resolve workflow over review artifacts
+    "memories:review": (120, 3600),
+    # Memory deletes — destructive operations
+    "memories:delete": (60, 3600),
+    # Delete-all is extremely destructive; tight cap with one retry cushion
+    "memories:delete_all": (2, 3600),
+    # Batch delete — each request removes up to 100 memories in one Firestore write,
+    # so the per-request cap is tighter than memories:delete (which is one memory each).
+    "memories:delete_batch": (10, 3600),
     # Goals — single LLM call
     "goals:suggest": (30, 3600),
     "goals:advice": (30, 3600),
@@ -69,14 +99,31 @@ RATE_POLICIES: dict[str, tuple[int, int]] = {
     "integration:memories": (60, 3600),
     # Phone verification uses IP-based rate_limit_dependency (pre-auth, no UID).
     # Not migrated to per-UID Lua limiter intentionally.
-    # Dev API
+    # Dev API. Read limits are intentionally separate from write limits so a
+    # polling client cannot consume the processing/write budget. Developer and
+    # MCP API-key contexts are keyed by app/key identity when available.
+    "dev:memories_read": (120, 3600),
+    "dev:action_items_read": (120, 3600),
+    "dev:conversations_read": (60, 3600),
+    "dev:conversation_detail_read": (60, 3600),
+    "dev:conversation_transcript_read": (25, 3600),
+    "dev:goals_read": (120, 3600),
     "dev:conversations": (25, 3600),
     "dev:memories": (120, 3600),
     "dev:memories_batch": (15, 3600),
+    "dev:action_items_write": (120, 3600),
+    "dev:goals_write": (120, 3600),
+    # MCP REST data API
+    "mcp:read": (300, 3600),
+    "mcp:memories_read": (120, 3600),
+    "mcp:memories_write": (120, 3600),
     # Test
     "test:prompt": (30, 3600),
     # Apps
     "apps:generate_prompts": (30, 3600),
+    # TTS — ElevenLabs proxy. Coarse outer ring; fine-grained burst + daily
+    # char caps are enforced in database.redis_db.check_tts_rate_limit.
+    "tts:synthesize": (300, 3600),
 }
 
 

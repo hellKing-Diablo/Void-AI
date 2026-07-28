@@ -1,10 +1,10 @@
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 
 import 'package:provider/provider.dart';
 
 import 'package:omi/gen/assets.gen.dart';
 import 'package:omi/pages/payments/payment_method_provider.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/widgets/animated_loading_button.dart';
 import 'package:omi/utils/other/validators.dart';
@@ -157,7 +157,7 @@ class _PaypalSetupPageState extends State<PaypalSetupPage> {
                               padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
                               margin: const EdgeInsets.only(left: 2.0, right: 2.0, top: 10, bottom: 6),
                               decoration: BoxDecoration(
-                                color: Color(0xFF35343B),
+                                color: const Color(0xFF35343B),
                                 borderRadius: BorderRadius.circular(10.0),
                               ),
                               width: double.infinity,
@@ -186,7 +186,7 @@ class _PaypalSetupPageState extends State<PaypalSetupPage> {
                               padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
                               margin: const EdgeInsets.only(left: 2.0, right: 2.0, top: 10, bottom: 6),
                               decoration: BoxDecoration(
-                                color: Color(0xFF35343B),
+                                color: const Color(0xFF35343B),
                                 borderRadius: BorderRadius.circular(10.0),
                               ),
                               width: double.infinity,
@@ -213,7 +213,7 @@ class _PaypalSetupPageState extends State<PaypalSetupPage> {
                           decoration: BoxDecoration(
                             color: const Color(0xFF1F1F25),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Color(0xFF35343B), width: 1),
+                            border: Border.all(color: const Color(0xFF35343B), width: 1),
                           ),
                           child: Row(
                             children: [
@@ -243,11 +243,11 @@ class _PaypalSetupPageState extends State<PaypalSetupPage> {
           onPressed: () async {
             if (_formKey.currentState!.validate()) {
               setState(() => _isLoading = true);
-              MixpanelManager().track(_isComplete ? 'Update PayPal Details' : 'Save PayPal Details');
+              PlatformManager.instance.analytics.track(_isComplete ? 'Update PayPal Details' : 'Save PayPal Details');
               await context.read<PaymentMethodProvider>().connectPayPal(
-                _emailController.text.trim(),
-                _paypalMeLinkController.text.trim(),
-              );
+                    _emailController.text.trim(),
+                    _paypalMeLinkController.text.trim(),
+                  );
 
               setState(() {
                 _isLoading = false;

@@ -1,11 +1,10 @@
-import 'package:flutter/material.dart';
-
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
 import 'package:omi/models/stt_response_schema.dart';
 
 enum SttProvider {
   omi,
+  omiParakeet,
   openai,
   openaiDiarize,
   deepgram,
@@ -55,6 +54,37 @@ class SttLanguages {
     'vi': 'Vietnamese',
     'th': 'Thai',
     'id': 'Indonesian',
+    'bg': 'Bulgarian',
+    'ca': 'Catalan',
+    'cs': 'Czech',
+    'da': 'Danish',
+    'et': 'Estonian',
+    'fi': 'Finnish',
+    'el': 'Greek',
+    'hu': 'Hungarian',
+    'lv': 'Latvian',
+    'lt': 'Lithuanian',
+    'ms': 'Malay',
+    'no': 'Norwegian',
+    'ro': 'Romanian',
+    'sk': 'Slovak',
+    'sv': 'Swedish',
+    'uk': 'Ukrainian',
+    'be': 'Belarusian',
+    'bn': 'Bengali',
+    'bs': 'Bosnian',
+    'hr': 'Croatian',
+    'fa': 'Persian',
+    'he': 'Hebrew',
+    'kn': 'Kannada',
+    'mk': 'Macedonian',
+    'mr': 'Marathi',
+    'sr': 'Serbian',
+    'sl': 'Slovenian',
+    'tl': 'Tagalog',
+    'ta': 'Tamil',
+    'te': 'Telugu',
+    'ur': 'Urdu',
     'multi': 'Auto-detect',
   };
 
@@ -92,11 +122,45 @@ class SttLanguages {
     'ja',
     'ko',
     'zh',
+    'ar',
     'hi',
     'ru',
     'pl',
     'tr',
+    'vi',
+    'th',
     'id',
+    'bg',
+    'ca',
+    'cs',
+    'da',
+    'et',
+    'fi',
+    'el',
+    'hu',
+    'lv',
+    'lt',
+    'ms',
+    'no',
+    'ro',
+    'sk',
+    'sv',
+    'uk',
+    'be',
+    'bn',
+    'bs',
+    'hr',
+    'fa',
+    'he',
+    'kn',
+    'mk',
+    'mr',
+    'sr',
+    'sl',
+    'tl',
+    'ta',
+    'te',
+    'ur',
   ];
 
   static const List<String> geminiSupported = ['en', 'es', 'fr', 'de', 'it', 'pt', 'ja', 'ko', 'zh', 'ar', 'hi', 'ru'];
@@ -106,7 +170,7 @@ class SttProviderConfig {
   final SttProvider provider;
   final String displayName;
   final String description;
-  final IconData icon;
+  final FaIconData icon;
   final bool requiresApiKey;
   final String requestType;
   final SttResponseSchema responseSchema;
@@ -137,15 +201,26 @@ class SttProviderConfig {
   bool get isPolling => SttRequestType.isPolling(requestType);
 
   static final _configs = <SttProvider, SttProviderConfig>{
-    SttProvider.omi: SttProviderConfig(
+    SttProvider.omi: const SttProviderConfig(
       provider: SttProvider.omi,
       displayName: 'Omi',
       description: 'Omi\'s optimized transcription service',
       icon: FontAwesomeIcons.robot,
       requestType: SttRequestType.streaming,
-      responseSchema: const SttResponseSchema(),
+      responseSchema: SttResponseSchema(),
     ),
-    SttProvider.openai: SttProviderConfig(
+    SttProvider.omiParakeet: const SttProviderConfig(
+      provider: SttProvider.omiParakeet,
+      displayName: 'Omi Parakeet',
+      description: 'Omi-hosted NVIDIA Parakeet — high-accuracy cloud transcription, no API key',
+      icon: FontAwesomeIcons.feather,
+      requiresApiKey: false,
+      requestType: SttRequestType.multipartForm,
+      supportedLanguages: SttLanguages.whisperSupported,
+      defaultLanguage: 'multi',
+      responseSchema: SttResponseSchema.openAI,
+    ),
+    SttProvider.openai: const SttProviderConfig(
       provider: SttProvider.openai,
       displayName: 'OpenAI Whisper',
       description: 'OpenAI Whisper API - High accuracy',
@@ -153,14 +228,14 @@ class SttProviderConfig {
       requiresApiKey: true,
       requestType: SttRequestType.multipartForm,
       supportedLanguages: SttLanguages.whisperSupported,
-      supportedModels: const ['whisper-1'],
+      supportedModels: ['whisper-1'],
       defaultLanguage: 'en',
       defaultModel: 'whisper-1',
       responseSchema: SttResponseSchema.openAI,
       apiKeyUrl: 'https://platform.openai.com/api-keys',
       docsUrl: 'https://platform.openai.com/docs/guides/speech-to-text',
     ),
-    SttProvider.openaiDiarize: SttProviderConfig(
+    SttProvider.openaiDiarize: const SttProviderConfig(
       provider: SttProvider.openaiDiarize,
       displayName: 'OpenAI GPT-4o Transcribe Diarize',
       description: 'GPT-4o Transcribe with speaker diarization',
@@ -168,14 +243,14 @@ class SttProviderConfig {
       requiresApiKey: true,
       requestType: SttRequestType.multipartForm,
       supportedLanguages: SttLanguages.whisperSupported,
-      supportedModels: const ['gpt-4o-transcribe-diarize'],
+      supportedModels: ['gpt-4o-transcribe-diarize'],
       defaultLanguage: 'en',
       defaultModel: 'gpt-4o-transcribe-diarize',
       responseSchema: SttResponseSchema.openAIDiarize,
       apiKeyUrl: 'https://platform.openai.com/api-keys',
       docsUrl: 'https://platform.openai.com/docs/models/gpt-4o-transcribe-diarize',
     ),
-    SttProvider.deepgram: SttProviderConfig(
+    SttProvider.deepgram: const SttProviderConfig(
       provider: SttProvider.deepgram,
       displayName: 'Deepgram',
       description: 'Deepgram Nova - Fast & accurate (polling)',
@@ -183,14 +258,14 @@ class SttProviderConfig {
       requiresApiKey: true,
       requestType: SttRequestType.rawBinary,
       supportedLanguages: SttLanguages.deepgramSupported,
-      supportedModels: const ['nova-3', 'nova-2'],
+      supportedModels: ['nova-3'],
       defaultLanguage: 'multi',
       defaultModel: 'nova-3',
       responseSchema: SttResponseSchema.deepgram,
       apiKeyUrl: 'https://console.deepgram.com/',
       docsUrl: 'https://developers.deepgram.com/docs/models-languages-overview',
     ),
-    SttProvider.deepgramLive: SttProviderConfig(
+    SttProvider.deepgramLive: const SttProviderConfig(
       provider: SttProvider.deepgramLive,
       displayName: 'Deepgram',
       description: 'Deepgram Nova - Real-time streaming',
@@ -198,14 +273,14 @@ class SttProviderConfig {
       requiresApiKey: true,
       requestType: SttRequestType.streaming,
       supportedLanguages: SttLanguages.deepgramSupported,
-      supportedModels: const ['nova-3', 'nova-2'],
+      supportedModels: ['nova-3'],
       defaultLanguage: 'multi',
       defaultModel: 'nova-3',
       responseSchema: SttResponseSchema.deepgramLive,
       apiKeyUrl: 'https://console.deepgram.com/',
       docsUrl: 'https://developers.deepgram.com/docs/models-languages-overview',
     ),
-    SttProvider.falai: SttProviderConfig(
+    SttProvider.falai: const SttProviderConfig(
       provider: SttProvider.falai,
       displayName: 'Fal.AI Wizper',
       description: 'Fal.AI Wizper - Cost effective',
@@ -218,7 +293,7 @@ class SttProviderConfig {
       apiKeyUrl: 'https://fal.ai/dashboard/keys',
       docsUrl: 'https://fal.ai/models/fal-ai/wizper',
     ),
-    SttProvider.gemini: SttProviderConfig(
+    SttProvider.gemini: const SttProviderConfig(
       provider: SttProvider.gemini,
       displayName: 'Google Gemini',
       description: 'Google Gemini - Multimodal AI',
@@ -226,14 +301,14 @@ class SttProviderConfig {
       requiresApiKey: true,
       requestType: SttRequestType.jsonBase64,
       supportedLanguages: SttLanguages.geminiSupported,
-      supportedModels: const ['gemini-2.5-flash', 'gemini-2.5-pro'],
+      supportedModels: ['gemini-2.5-flash', 'gemini-2.5-pro'],
       defaultLanguage: 'en',
       defaultModel: 'gemini-2.0-flash',
       responseSchema: SttResponseSchema.gemini,
       apiKeyUrl: 'https://aistudio.google.com/apikey',
       docsUrl: 'https://ai.google.dev/gemini-api/docs/models/gemini',
     ),
-    SttProvider.geminiLive: SttProviderConfig(
+    SttProvider.geminiLive: const SttProviderConfig(
       provider: SttProvider.geminiLive,
       displayName: 'Google Gemini',
       description: 'Google Gemini - Real-time streaming',
@@ -241,14 +316,14 @@ class SttProviderConfig {
       requiresApiKey: true,
       requestType: SttRequestType.streaming,
       supportedLanguages: SttLanguages.geminiSupported,
-      supportedModels: const ['gemini-2.5-flash-native-audio-preview-12-2025'],
+      supportedModels: ['gemini-2.5-flash-native-audio-preview-12-2025'],
       defaultLanguage: 'en',
       defaultModel: 'gemini-2.5-flash-native-audio-preview-12-2025',
       responseSchema: SttResponseSchema.geminiLive,
       apiKeyUrl: 'https://aistudio.google.com/apikey',
       docsUrl: 'https://ai.google.dev/gemini-api/docs/models/gemini',
     ),
-    SttProvider.localWhisper: SttProviderConfig(
+    SttProvider.localWhisper: const SttProviderConfig(
       provider: SttProvider.localWhisper,
       displayName: 'Local Whisper',
       description: 'Self-hosted Whisper server',
@@ -259,7 +334,7 @@ class SttProviderConfig {
       responseSchema: SttResponseSchema.openAI,
       docsUrl: 'https://github.com/openai/whisper',
     ),
-    SttProvider.custom: SttProviderConfig(
+    SttProvider.custom: const SttProviderConfig(
       provider: SttProvider.custom,
       displayName: 'Custom',
       description: 'Define your own STT endpoint (polling)',
@@ -269,7 +344,7 @@ class SttProviderConfig {
       defaultLanguage: 'en',
       responseSchema: SttResponseSchema.openAI,
     ),
-    SttProvider.customLive: SttProviderConfig(
+    SttProvider.customLive: const SttProviderConfig(
       provider: SttProvider.customLive,
       displayName: 'Custom',
       description: 'Define your own real-time STT endpoint',
@@ -279,14 +354,14 @@ class SttProviderConfig {
       defaultLanguage: 'en',
       responseSchema: SttResponseSchema.openAI,
     ),
-    SttProvider.onDeviceWhisper: SttProviderConfig(
+    SttProvider.onDeviceWhisper: const SttProviderConfig(
       provider: SttProvider.onDeviceWhisper,
       displayName: 'On-Device',
       description: 'Run Whisper locally on your device (Offline)',
       icon: FontAwesomeIcons.microchip,
       requestType: SttRequestType.multipartForm, // Used for polling/file interface internally
       supportedLanguages: SttLanguages.whisperSupported,
-      supportedModels: const ['tiny', 'base', 'small', 'medium', 'large-v1', 'large-v2'],
+      supportedModels: ['tiny', 'base', 'small', 'medium', 'large-v1', 'large-v2'],
       defaultLanguage: 'multi',
       defaultModel: 'tiny',
       responseSchema: SttResponseSchema.openAI,
@@ -325,21 +400,22 @@ class SttProviderConfig {
 
   /// Available request config templates for custom STT configuration
   static Map<String, Map<String, dynamic>> get requestTemplates => {
-    'OpenAI': get(SttProvider.openai).buildRequestConfig(apiKey: 'YOUR_API_KEY', language: 'en', model: 'whisper-1'),
-    'Deepgram': get(
-      SttProvider.deepgramLive,
-    ).buildRequestConfig(apiKey: 'YOUR_API_KEY', language: 'multi', model: 'nova-3'),
-    'Fal.AI': get(SttProvider.falai).buildRequestConfig(apiKey: 'YOUR_API_KEY', language: 'en'),
-    'Google Gemini': get(
-      SttProvider.geminiLive,
-    ).buildRequestConfig(apiKey: 'YOUR_API_KEY', language: 'en', model: 'gemini-2.5-flash'),
-    'Whisper': get(SttProvider.localWhisper).buildRequestConfig(language: 'en'),
-  };
+        'OpenAI':
+            get(SttProvider.openai).buildRequestConfig(apiKey: 'YOUR_API_KEY', language: 'en', model: 'whisper-1'),
+        'Deepgram': get(
+          SttProvider.deepgramLive,
+        ).buildRequestConfig(apiKey: 'YOUR_API_KEY', language: 'multi', model: 'nova-3'),
+        'Fal.AI': get(SttProvider.falai).buildRequestConfig(apiKey: 'YOUR_API_KEY', language: 'en'),
+        'Google Gemini': get(
+          SttProvider.geminiLive,
+        ).buildRequestConfig(apiKey: 'YOUR_API_KEY', language: 'en', model: 'gemini-2.5-flash'),
+        'Whisper': get(SttProvider.localWhisper).buildRequestConfig(language: 'en'),
+      };
 
   Map<String, dynamic> getFullTemplateJson() => {
-    'request_type': requestType,
-    'response_schema': responseSchema.toJson(),
-  };
+        'request_type': requestType,
+        'response_schema': responseSchema.toJson(),
+      };
 
   /// Build complete request config with API key, language, and model
   /// Returns unified structure: url, request_type, headers, params, audio_field_name
@@ -448,6 +524,12 @@ class SttProviderConfig {
 
       case SttProvider.customLive:
         config['url'] = 'wss://your-stt-api.com/stream';
+        config['params'] = {'language': lang};
+        break;
+
+      case SttProvider.omiParakeet:
+        config['url'] = 'https://parakeet.omiapi.com/v1/transcribe';
+        config['audio_field_name'] = 'file';
         config['params'] = {'language': lang};
         break;
 

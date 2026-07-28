@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -12,7 +13,6 @@ import 'package:share_plus/share_plus.dart';
 import 'package:omi/gen/pigeon_communicator.g.dart';
 import 'package:omi/providers/device_provider.dart';
 import 'package:omi/services/bridges/ble_bridge.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 
 class DeviceDiagnostics extends StatefulWidget {
@@ -28,6 +28,9 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
   final List<_RssiPoint> _rssiPoints = [];
   static const int _maxRssiPoints = 120;
 
+  List<BleBatteryPoint> _batteryHistory = [];
+  bool _batteryDayView = true;
+
   BleDeviceDiagnostics? _diagnostics;
   bool _isLoading = true;
   final _bleHostApi = BleHostApi();
@@ -35,8 +38,8 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
   @override
   void initState() {
     super.initState();
-    MixpanelManager().track('Diagnostics Opened');
-    _loadDiagnostics();
+    PlatformManager.instance.analytics.track('Diagnostics Opened');
+    _loadAll();
     _startRssiStreaming();
   }
 
@@ -46,19 +49,30 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
     super.dispose();
   }
 
+  Future<void> _loadAll() async {
+    await Future.wait([_loadDiagnostics(), _loadBatteryHistory()]);
+    if (mounted) {
+      setState(() => _isLoading = false);
+    }
+  }
+
   Future<void> _loadDiagnostics() async {
     try {
       final diagnostics = await _bleHostApi.getDeviceDiagnostics(widget.deviceId);
       if (mounted) {
-        setState(() {
-          _diagnostics = diagnostics;
-          _isLoading = false;
-        });
+        setState(() => _diagnostics = diagnostics);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadBatteryHistory() async {
+    try {
+      final history = await _bleHostApi.getBatteryHistory(widget.deviceId);
+      if (mounted) {
+        setState(() => _batteryHistory = history);
       }
     } catch (e) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
+      debugPrint('[DeviceDiagnostics] getBatteryHistory failed: $e');
     }
   }
 
@@ -81,19 +95,24 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
       'battery': deviceProvider.batteryLevel,
       'connected_at': _diagnostics?.connectedAt ?? 0,
       'reconnection_count': _diagnostics?.reconnectionCount ?? 0,
-      'rssi_samples': _rssiPoints
-          .map((p) => {
-                'ts': p.time.millisecondsSinceEpoch,
-                'rssi': p.rssi,
-              })
-          .toList(),
+      'fail_to_connect_count': _diagnostics?.failToConnectCount ?? 0,
+      'rssi_samples': _rssiPoints.map((p) => {'ts': p.time.millisecondsSinceEpoch, 'rssi': p.rssi}).toList(),
+      'battery_history': _batteryHistory.map((p) => {'ts': p.timestamp, 'level': p.level}).toList(),
       'disconnect_history': (_diagnostics?.disconnectHistory ?? [])
-          .map((e) => {
-                'ts': e.timestamp,
-                'reason': e.reason,
-                'code': e.reasonCode,
-                'manual': e.isManual,
-              })
+          .map(
+            (e) => {
+              'ts': e.timestamp,
+              'reason': e.reason,
+              'code': e.reasonCode,
+              'manual': e.isManual,
+              'event_type': e.eventType,
+              'last_rssi': e.lastRssi,
+              'connection_duration_ms': e.connectionDurationMs,
+              'app_state': e.appState,
+              'time_to_reconnect_ms': e.timeToReconnectMs,
+              'rssi_trend': e.rssiTrend,
+            },
+          )
           .toList(),
     };
 
@@ -101,12 +120,17 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/omi_diagnostics_${DateTime.now().millisecondsSinceEpoch}.json');
     await file.writeAsString(json);
-    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], subject: 'Omi Device Diagnostics'));
-    MixpanelManager().track('Diagnostics Exported', properties: {
-      'disconnect_count': (_diagnostics?.disconnectHistory ?? []).length,
-      'reconnection_count': _diagnostics?.reconnectionCount ?? 0,
-      'rssi_samples': _rssiPoints.length,
-    });
+    await SharePlus.instance.share(
+      ShareParams(files: [XFile(file.path)], title: 'Omi Device Diagnostics', subject: 'Omi Device Diagnostics'),
+    );
+    PlatformManager.instance.analytics.track(
+      'Diagnostics Exported',
+      properties: {
+        'disconnect_count': (_diagnostics?.disconnectHistory ?? []).length,
+        'reconnection_count': _diagnostics?.reconnectionCount ?? 0,
+        'rssi_samples': _rssiPoints.length,
+      },
+    );
   }
 
   void _onRssiUpdate(int rssi) {
@@ -150,8 +174,10 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
       backgroundColor: const Color(0xFF0D0D0D),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0D0D0D),
-        title: Text(context.l10n.deviceDiagnostics,
-            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+        title: Text(
+          context.l10n.deviceDiagnostics,
+          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+        ),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios, color: Colors.white, size: 20),
           onPressed: () => Navigator.of(context).pop(),
@@ -173,6 +199,8 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
                   _buildStatusCards(),
                   const SizedBox(height: 24),
                   _buildRssiChart(),
+                  const SizedBox(height: 24),
+                  _buildBatteryChart(),
                   const SizedBox(height: 24),
                   _buildDisconnectHistory(),
                   const SizedBox(height: 32),
@@ -241,7 +269,7 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
   }
 
   Widget _statusCard({
-    required IconData icon,
+    required FaIconData icon,
     required String label,
     required String value,
     Color? valueColor,
@@ -391,6 +419,171 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
     return 30;
   }
 
+  Color _batteryColor(int level) {
+    if (level > 50) return const Color(0xFF4CAF50);
+    if (level > 20) return const Color(0xFFFFC107);
+    return const Color(0xFFF44336);
+  }
+
+  Widget _buildBatteryChart() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final windowMs = _batteryDayView ? 24 * 3600 * 1000 : 7 * 24 * 3600 * 1000;
+    final cutoff = now - windowMs;
+    final points = _batteryHistory.where((p) => p.timestamp >= cutoff).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              context.l10n.batteryHistory,
+              style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w600),
+            ),
+            const Spacer(),
+            Container(
+              decoration: BoxDecoration(color: const Color(0xFF2C2C2E), borderRadius: BorderRadius.circular(8)),
+              child: Row(
+                children: [
+                  _segmentButton(context.l10n.day, _batteryDayView, () => setState(() => _batteryDayView = true)),
+                  _segmentButton(context.l10n.week, !_batteryDayView, () => setState(() => _batteryDayView = false)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Container(
+          height: 200,
+          padding: const EdgeInsets.only(top: 16, right: 16, bottom: 8),
+          decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(16)),
+          child: points.length < 2
+              ? Center(
+                  child: Text(
+                    context.l10n.noBatteryDataYet,
+                    style: TextStyle(color: Colors.grey.shade500, fontSize: 14),
+                  ),
+                )
+              : LineChart(_buildBatteryLineChartData(points)),
+        ),
+      ],
+    );
+  }
+
+  Widget _segmentButton(String label, bool active, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFF48484A) : Colors.transparent,
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: active ? Colors.white : Colors.grey.shade400,
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
+
+  LineChartData _buildBatteryLineChartData(List<BleBatteryPoint> points) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final spots = points.map((p) {
+      final hoursAgo = (now - p.timestamp) / 3600000.0;
+      return FlSpot(-hoursAgo, p.level.toDouble());
+    }).toList();
+
+    final minX = spots.first.x;
+    final maxX = spots.last.x;
+    final lastLevel = points.last.level.toInt();
+
+    return LineChartData(
+      gridData: FlGridData(
+        show: true,
+        drawVerticalLine: false,
+        horizontalInterval: 25,
+        getDrawingHorizontalLine: (value) => FlLine(color: Colors.white.withValues(alpha: 0.06), strokeWidth: 1),
+      ),
+      titlesData: FlTitlesData(
+        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        bottomTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            reservedSize: 28,
+            interval: _batteryDayView ? 4 : 24,
+            getTitlesWidget: (value, meta) {
+              final h = value.abs();
+              if (_batteryDayView) {
+                return Text('${h.toInt()}h', style: TextStyle(color: Colors.grey.shade500, fontSize: 10));
+              }
+              return Text('${(h / 24).toInt()}d', style: TextStyle(color: Colors.grey.shade500, fontSize: 10));
+            },
+          ),
+        ),
+        leftTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            reservedSize: 36,
+            interval: 25,
+            getTitlesWidget: (value, meta) {
+              return Text('${value.toInt()}', style: TextStyle(color: Colors.grey.shade500, fontSize: 10));
+            },
+          ),
+        ),
+      ),
+      borderData: FlBorderData(show: false),
+      minY: 0,
+      maxY: 100,
+      minX: minX,
+      maxX: maxX,
+      lineTouchData: LineTouchData(
+        touchTooltipData: LineTouchTooltipData(
+          getTooltipColor: (_) => const Color(0xFF2C2C34),
+          getTooltipItems: (touchedSpots) {
+            return touchedSpots.map((spot) {
+              final level = spot.y.toInt();
+              final hoursAgo = spot.x.abs();
+              final timeLabel =
+                  hoursAgo < 1 ? '${(hoursAgo * 60).toInt()}m ago' : '${hoursAgo.toStringAsFixed(1)}h ago';
+              return LineTooltipItem(
+                '$level%\n$timeLabel',
+                TextStyle(color: _batteryColor(level), fontWeight: FontWeight.w600, fontSize: 13),
+              );
+            }).toList();
+          },
+        ),
+      ),
+      lineBarsData: [
+        LineChartBarData(
+          spots: spots,
+          isCurved: true,
+          curveSmoothness: 0.2,
+          color: _batteryColor(lastLevel),
+          barWidth: 2.5,
+          isStrokeCapRound: true,
+          dotData: const FlDotData(show: false),
+          belowBarData: BarAreaData(
+            show: true,
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                _batteryColor(lastLevel).withValues(alpha: 0.3),
+                _batteryColor(lastLevel).withValues(alpha: 0.0),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildDisconnectHistory() {
     final history = _diagnostics?.disconnectHistory ?? [];
 
@@ -441,18 +634,29 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
     final time = DateTime.fromMillisecondsSinceEpoch(event.timestamp);
     final timeStr = DateFormat('MMM d, HH:mm:ss').format(time);
     final isManual = event.isManual;
+    final isFail = event.eventType == 'fail_to_connect';
     final reason = _formatReason(event.reason);
+
+    final Color dot = isManual ? const Color(0xFF8E8E93) : (isFail ? const Color(0xFFFF9500) : const Color(0xFFF44336));
+
+    final metaParts = <String>[];
+    if (event.rssiTrend.isNotEmpty) metaParts.add(event.rssiTrend);
+    if (event.lastRssi != 0) metaParts.add('${event.lastRssi} dBm');
+    if (event.connectionDurationMs > 0) metaParts.add(_formatDurationMs(event.connectionDurationMs));
+    if (event.appState.isNotEmpty) metaParts.add(event.appState);
+    if (event.timeToReconnectMs > 0) metaParts.add('reconn ${_formatDurationMs(event.timeToReconnectMs)}');
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: isManual ? const Color(0xFF8E8E93) : const Color(0xFFF44336),
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: dot),
             ),
           ),
           const SizedBox(width: 12),
@@ -460,13 +664,26 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(reason, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w400)),
+                Text(
+                  reason,
+                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w400),
+                ),
                 const SizedBox(height: 2),
                 Text(timeStr, style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+                if (metaParts.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(metaParts.join(' · '), style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
+                ],
               ],
             ),
           ),
-          if (isManual)
+          if (isFail)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(color: const Color(0xFF3A2A10), borderRadius: BorderRadius.circular(8)),
+              child: const Text('fail', style: TextStyle(color: Color(0xFFFF9500), fontSize: 11)),
+            )
+          else if (isManual)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(color: const Color(0xFF2A2A2E), borderRadius: BorderRadius.circular(8)),
@@ -475,6 +692,13 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
         ],
       ),
     );
+  }
+
+  String _formatDurationMs(int ms) {
+    if (ms < 1000) return '${ms}ms';
+    if (ms < 60000) return '${(ms / 1000).toStringAsFixed(1)}s';
+    if (ms < 3600000) return '${(ms / 60000).toStringAsFixed(1)}m';
+    return '${(ms / 3600000).toStringAsFixed(1)}h';
   }
 
   String _formatReason(String reason) {

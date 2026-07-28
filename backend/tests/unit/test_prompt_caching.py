@@ -9,18 +9,13 @@ Verifies that:
 
 import inspect
 import re
-import sys
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
 
-# Mock modules that initialize GCP clients or require API keys at import time
-sys.modules.setdefault("database._client", MagicMock())
-_mock_clients = MagicMock()
-sys.modules.setdefault("utils.llm.clients", _mock_clients)
-
-from models.conversation import CalendarMeetingContext, MeetingParticipant, ConversationPhoto
+from models.calendar_context import CalendarMeetingContext, MeetingParticipant
+from models.conversation_photo import ConversationPhoto
 from utils.llm.conversation_processing import (
     _build_conversation_context,
+    _gpt56_cacheable_system_message,
     extract_action_items,
     get_transcript_structure,
 )
@@ -189,15 +184,16 @@ class TestPromptMessageOrdering:
     def _get_from_messages_calls(self, func):
         """Extract ChatPromptTemplate.from_messages call patterns from function source."""
         source = inspect.getsource(func)
-        return re.findall(r'from_messages\(\[(.*?)\]\)', source, re.DOTALL)
+        return re.findall(r'from_messages\(\s*\[(.*?)\]\s*\)', source, re.DOTALL)
 
     def test_get_transcript_structure_instructions_first(self):
         """Static instructions must be the first system message for cross-conversation caching."""
         calls = self._get_from_messages_calls(get_transcript_structure)
         assert len(calls) == 1, "Expected exactly one from_messages call"
         args = calls[0].strip()
-        # instructions_text should come before context_message
-        instructions_pos = args.index('instructions_text')
+        # The cached prefix is a concrete message so parser-schema braces are
+        # never treated as ChatPromptTemplate variables.
+        instructions_pos = args.index('_gpt56_cacheable_system_message(instructions_text')
         context_pos = args.index('context_message')
         assert instructions_pos < context_pos, "instructions_text must come before context_message"
 
@@ -206,7 +202,7 @@ class TestPromptMessageOrdering:
         calls = self._get_from_messages_calls(extract_action_items)
         assert len(calls) == 1, "Expected exactly one from_messages call"
         args = calls[0].strip()
-        instructions_pos = args.index('instructions_text')
+        instructions_pos = args.index('_gpt56_cacheable_system_message(instructions_text')
         context_pos = args.index('context_message')
         assert instructions_pos < context_pos, "instructions_text must come before context_message"
 
@@ -215,9 +211,8 @@ class TestPromptMessageOrdering:
         for func in [get_transcript_structure, extract_action_items]:
             calls = self._get_from_messages_calls(func)
             assert len(calls) == 1, f"{func.__name__}: expected one from_messages call"
-            # Count 'system' occurrences in the call
-            system_count = calls[0].count("'system'")
-            assert system_count == 2, f"{func.__name__}: expected 2 system messages, got {system_count}"
+            assert calls[0].count('_gpt56_cacheable_system_message(') == 1
+            assert calls[0].count("('system', context_message)") == 1
 
     def test_existing_items_context_not_in_instructions(self):
         """existing_items_context must be in the context message, not the instructions."""
@@ -230,7 +225,7 @@ class TestPromptMessageOrdering:
             '{existing_items_context}' not in instructions_content
         ), "existing_items_context should not be in instructions_text (breaks static prefix caching)"
         # Verify it IS in the context_message
-        context_match = re.search(r"context_message\s*=\s*['\"](.+?)['\"]", source)
+        context_match = re.search(r"context_message\s*=\s*'''(.*?)'''", source, re.DOTALL)
         assert context_match, "Could not find context_message definition"
         assert 'existing_items_context' in context_match.group(1), "existing_items_context should be in context_message"
 
@@ -243,7 +238,7 @@ class TestPromptMessageOrdering:
         assert (
             '{language_code}' not in instructions_content
         ), "language_code should not be in instructions_text (breaks static prefix caching for non-English)"
-        context_match = re.search(r"context_message\s*=\s*['\"](.+?)['\"]", source)
+        context_match = re.search(r"context_message\s*=\s*'''(.*?)'''", source, re.DOTALL)
         assert context_match, "Could not find context_message definition"
         assert 'language_code' in context_match.group(1), "language_code should be in context_message"
 
@@ -256,34 +251,44 @@ class TestPromptCacheRetention:
         from pathlib import Path
 
         clients_path = Path(__file__).resolve().parent.parent.parent / "utils" / "llm" / "clients.py"
-        return clients_path.read_text()
+        return clients_path.read_text(encoding="utf-8")
 
-    def test_llm_medium_experiment_has_cache_retention(self):
-        """llm_medium_experiment must have extra_body with prompt_cache_retention=24h."""
+    @staticmethod
+    def _import_model_config():
+        """Import model_config.py in isolation (it has only stdlib deps)."""
+        import importlib.util
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parent.parent.parent / "utils" / "llm" / "model_config.py"
+        spec = importlib.util.spec_from_file_location("_omi_model_config_test", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_qos_openai_llm_gates_retention_by_capability(self):
+        """_get_or_create_openai_llm must gate prompt_cache_retention=24h via a capability check."""
         source = self._read_clients_source()
-        # Find the llm_medium_experiment definition block and check extra_body
         match = re.search(
-            r'llm_medium_experiment\s*=.*?extra_body\s*=\s*\{[^}]*"prompt_cache_retention"\s*:\s*"24h"',
+            r"_get_or_create_openai_llm.*?supports_cache_retention\(.*?prompt_cache_retention.*?24h",
             source,
             re.DOTALL,
         )
-        assert match, "llm_medium_experiment missing extra_body with prompt_cache_retention='24h'"
+        assert match, "_get_or_create_openai_llm should gate prompt_cache_retention='24h' by supports_cache_retention()"
 
-    def test_llm_agent_has_cache_retention(self):
-        """llm_agent must have extra_body with prompt_cache_retention=24h."""
-        source = self._read_clients_source()
-        match = re.search(
-            r'llm_agent\s*=.*?extra_body\s*=\s*\{[^}]*"prompt_cache_retention"\s*:\s*"24h"', source, re.DOTALL
-        )
-        assert match, "llm_agent missing extra_body with prompt_cache_retention='24h'"
-
-    def test_llm_agent_stream_has_cache_retention(self):
-        """llm_agent_stream must have extra_body with prompt_cache_retention=24h."""
-        source = self._read_clients_source()
-        match = re.search(
-            r'llm_agent_stream\s*=.*?extra_body\s*=\s*\{[^}]*"prompt_cache_retention"\s*:\s*"24h"', source, re.DOTALL
-        )
-        assert match, "llm_agent_stream missing extra_body with prompt_cache_retention='24h'"
+    def test_capability_gating_matrix(self):
+        """Capability gating (not exact names): renamed gpt-5 still cached, non-capable models untouched."""
+        mc = self._import_model_config()
+        # A renamed/future gpt-5 family model must still get routing + retention.
+        assert mc.supports_prompt_cache("gpt-5.9-turbo"), "renamed gpt-5 should support prompt_cache_key"
+        assert mc.supports_cache_retention("gpt-5.9-turbo"), "renamed gpt-5 should support 24h retention"
+        # gpt-5.1 must stay retention-capable after the refactor (the original hardcoded case).
+        assert mc.supports_cache_retention("gpt-5.1"), "gpt-5.1 must remain retention-capable"
+        # gpt-4.1 family: routing yes, 24h retention no.
+        assert mc.supports_prompt_cache("gpt-4.1-mini")
+        assert not mc.supports_cache_retention("gpt-4.1-mini")
+        # Non-OpenAI models get neither.
+        assert not mc.supports_prompt_cache("gemini-2.5-flash-lite")
+        assert not mc.supports_cache_retention("gemini-2.5-flash-lite")
 
     def test_cache_retention_not_in_model_kwargs(self):
         """prompt_cache_retention must NOT be in model_kwargs (SDK rejects it there)."""
@@ -293,26 +298,42 @@ class TestPromptCacheRetention:
             assert 'prompt_cache_retention' not in block, f"prompt_cache_retention must not be in model_kwargs: {block}"
 
     def test_prompt_cache_key_in_structure_function(self):
-        """get_transcript_structure must use prompt_cache_key='omi-transcript-structure'."""
+        """The structure path keeps a fixed, non-user-derived cache routing key."""
         source = inspect.getsource(get_transcript_structure)
-        assert (
-            'prompt_cache_key="omi-transcript-structure"' in source
-        ), "get_transcript_structure missing prompt_cache_key binding"
+        assert "_cache_bucket_key('omi-transcript-structure')" in source
+        assert "cache_key = 'omi-transcript-structure'" in source
 
     def test_prompt_cache_key_in_action_items_function(self):
-        """extract_action_items must use prompt_cache_key='omi-extract-actions'."""
+        """The action-items path keeps a fixed, non-user-derived cache routing key."""
         source = inspect.getsource(extract_action_items)
-        assert (
-            'prompt_cache_key="omi-extract-actions"' in source
-        ), "extract_action_items missing prompt_cache_key binding"
+        assert "_cache_bucket_key('omi-extract-actions')" in source
+        assert "cache_key = 'omi-extract-actions'" in source
 
     def test_distinct_cache_keys_per_function(self):
-        """Each function must have a distinct prompt_cache_key to avoid cache conflation."""
+        """Each function must have a distinct cache_key to avoid cache conflation."""
         source_structure = inspect.getsource(get_transcript_structure)
         source_actions = inspect.getsource(extract_action_items)
-        key_structure = re.search(r'prompt_cache_key="([^"]+)"', source_structure)
-        key_actions = re.search(r'prompt_cache_key="([^"]+)"', source_actions)
-        assert key_structure and key_actions, "Both functions must have prompt_cache_key"
+        key_structure = re.search(r"_cache_bucket_key\('([^']+)'\)", source_structure)
+        key_actions = re.search(r"_cache_bucket_key\('([^']+)'\)", source_actions)
+        assert key_structure and key_actions, "Both functions must have cache_key"
         assert key_structure.group(1) != key_actions.group(
             1
         ), f"Cache keys must be distinct: structure={key_structure.group(1)}, actions={key_actions.group(1)}"
+
+
+def test_explicit_cache_system_message_preserves_parser_schema_braces():
+    """A cached system message must bypass ChatPromptTemplate variable parsing."""
+    from langchain_core.prompts import ChatPromptTemplate
+
+    system_message = _gpt56_cacheable_system_message('{"title": "string"}', cache_enabled=True)
+    prompt = ChatPromptTemplate.from_messages([system_message, ('system', 'Content: {conversation_context}')])
+
+    messages = prompt.format_messages(conversation_context='Transcript: hello')
+
+    assert messages[0].content == [
+        {
+            'type': 'text',
+            'text': '{"title": "string"}',
+            'prompt_cache_breakpoint': {'mode': 'explicit'},
+        }
+    ]

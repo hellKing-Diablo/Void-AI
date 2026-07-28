@@ -3,15 +3,12 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:flutter/material.dart';
-
 import 'package:intl/intl.dart';
 import 'package:opus_dart/opus_dart.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:tuple/tuple.dart';
 
 import 'package:omi/backend/schema/bt_device/bt_device.dart';
-import 'package:omi/utils/logger.dart';
 import 'package:omi/utils/logger.dart';
 import 'package:omi/utils/platform/platform_manager.dart';
 
@@ -72,12 +69,11 @@ class WavBytes {
     wavData.setUint8(39, 0x61); // 'a'
     wavData.setUint32(40, subchunk2Size, Endian.little); // Subchunk2Size
 
-    // Copy PCM data
-    for (int i = 0; i < _pcmData.length; i++) {
-      wavData.setUint8(44 + i, _pcmData[i]);
-    }
+    // Copy PCM data (bulk copy via Uint8List view instead of byte-by-byte)
+    final wavBytes = wavData.buffer.asUint8List();
+    wavBytes.setRange(44, 44 + _pcmData.length, _pcmData);
 
-    return wavData.buffer.asUint8List();
+    return wavBytes;
   }
 }
 

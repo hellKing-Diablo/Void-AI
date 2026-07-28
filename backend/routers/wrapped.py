@@ -4,9 +4,9 @@ Wrapped 2025 API endpoints.
 Provides generation and retrieval of yearly recap data.
 """
 
-import threading
-from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, Optional
+
+from utils.executors import llm_executor
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -14,6 +14,7 @@ from pydantic import BaseModel
 import database.wrapped as wrapped_db
 from database.wrapped import WrappedStatus
 from utils.other import endpoints as auth
+from utils.wrapped.generate_2025 import generate_wrapped_2025
 import logging
 
 logger = logging.getLogger(__name__)
@@ -25,9 +26,9 @@ router = APIRouter()
 class WrappedStatusResponse(BaseModel):
     status: str
     year: int = 2025
-    result: Optional[dict] = None
+    result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
-    progress: Optional[dict] = None
+    progress: Optional[Dict[str, Any]] = None
 
 
 class GenerateWrappedResponse(BaseModel):
@@ -35,12 +36,9 @@ class GenerateWrappedResponse(BaseModel):
     message: str
 
 
-# Background generation function (imported lazily to avoid circular imports)
 def _run_wrapped_generation(uid: str, year: int):
-    """Run wrapped generation in a background thread."""
+    """Run wrapped generation in background executor."""
     try:
-        from utils.wrapped.generate_2025 import generate_wrapped_2025
-
         generate_wrapped_2025(uid, year)
     except Exception as e:
         logger.error(f"Error in wrapped generation for user {uid}: {e}")
@@ -110,8 +108,7 @@ def generate_wrapped(
         if wrapped_db.is_wrapped_stuck(wrapped):
             # Restart stuck job
             wrapped_db.reset_wrapped_for_regeneration(uid, year)
-            thread = threading.Thread(target=_run_wrapped_generation, args=(uid, year))
-            thread.start()
+            llm_executor.submit(_run_wrapped_generation, uid, year)
             return GenerateWrappedResponse(
                 status=WrappedStatus.PROCESSING,
                 message="Restarting stuck generation...",
@@ -129,8 +126,7 @@ def generate_wrapped(
         wrapped_db.create_wrapped(uid, year)
 
     # Start generation in background
-    thread = threading.Thread(target=_run_wrapped_generation, args=(uid, year))
-    thread.start()
+    llm_executor.submit(_run_wrapped_generation, uid, year)
 
     return GenerateWrappedResponse(
         status=WrappedStatus.PROCESSING,

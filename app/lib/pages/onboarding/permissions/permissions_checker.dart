@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 
 import 'package:permission_handler/permission_handler.dart';
@@ -9,7 +10,6 @@ import 'package:omi/backend/preferences.dart';
 import 'package:omi/gen/assets.gen.dart';
 import 'package:omi/pages/home/page.dart';
 import 'package:omi/providers/onboarding_provider.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/widgets/dialog.dart';
 
@@ -27,10 +27,9 @@ class PermissionsInterstitialPage extends StatelessWidget {
 
   void _goHome(BuildContext context) {
     SharedPreferencesUtil().permissionsCompleted = true;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const HomePageWrapper()),
-      (route) => false,
-    );
+    Navigator.of(
+      context,
+    ).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const HomePageWrapper()), (route) => false);
   }
 
   @override
@@ -45,11 +44,7 @@ class PermissionsInterstitialPage extends StatelessWidget {
               Expanded(
                 child: Align(
                   alignment: const Alignment(0, 0.4),
-                  child: Image.asset(
-                    Assets.images.logoTransparent.path,
-                    width: 120,
-                    height: 120,
-                  ),
+                  child: Image.asset(Assets.images.logoTransparent.path, width: 120, height: 120),
                 ),
               ),
 
@@ -138,6 +133,8 @@ class PermissionsInterstitialPage extends StatelessWidget {
                             } else {
                               bool wasGranted = permissionStatus.isGranted;
                               provider.updateLocationPermission(wasGranted);
+                              // iOS-only: chain Always so background location
+                              // updates work in BGTask windows.
                               await provider.alwaysAllowLocation();
                               if (wasGranted) {
                                 provider.updateLocationPermission(true);
@@ -182,20 +179,13 @@ class PermissionsInterstitialPage extends StatelessWidget {
                                     }
                                     if (await Permission.location.serviceStatus.isEnabled) {
                                       var res = await Permission.locationWhenInUse.request();
-                                      if (res.isGranted) {
-                                        var alwaysRes = await Permission.locationAlways.request();
-                                        if (alwaysRes.isGranted) {
-                                          provider.updateLocationPermission(true);
-                                        } else {
-                                          await Future.delayed(const Duration(milliseconds: 2500));
-                                          if (await Permission.locationAlways.status.isGranted) {
-                                            provider.updateLocationPermission(true);
-                                          }
-                                        }
+                                      provider.updateLocationPermission(res.isGranted);
+                                      if (Platform.isIOS && res.isGranted) {
+                                        await provider.alwaysAllowLocation();
                                       }
                                     }
                                   });
-                                  MixpanelManager().permissionsInterstitialCompleted();
+                                  PlatformManager.instance.analytics.permissionsInterstitialCompleted();
                                   provider.setLoading(false);
                                   if (context.mounted) {
                                     _goHome(context);
@@ -217,25 +207,6 @@ class PermissionsInterstitialPage extends StatelessWidget {
                                 ),
                               ),
                             ),
-
-                      const SizedBox(height: 16),
-
-                      // Skip for now
-                      GestureDetector(
-                        onTap: () {
-                          MixpanelManager().permissionsInterstitialSkipped();
-                          _goHome(context);
-                        },
-                        child: Text(
-                          context.l10n.skipForNow,
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.6),
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                            fontFamily: 'Manrope',
-                          ),
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -254,12 +225,7 @@ class _PermissionTile extends StatelessWidget {
   final String subtitle;
   final Function(bool?) onChanged;
 
-  const _PermissionTile({
-    required this.value,
-    required this.title,
-    required this.subtitle,
-    required this.onChanged,
-  });
+  const _PermissionTile({required this.value, required this.title, required this.subtitle, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {

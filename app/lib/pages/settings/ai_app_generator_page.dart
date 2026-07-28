@@ -1,3 +1,4 @@
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -8,19 +9,27 @@ import 'package:omi/widgets/shimmer_with_timeout.dart';
 import 'package:omi/backend/schema/app.dart';
 import 'package:omi/pages/apps/app_detail/app_detail.dart';
 import 'package:omi/pages/settings/ai_app_generator_provider.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/providers/app_provider.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/utils/other/temp.dart';
 
-class AiAppGeneratorPage extends StatefulWidget {
+class AiAppGeneratorPage extends StatelessWidget {
   const AiAppGeneratorPage({super.key});
 
   @override
-  State<AiAppGeneratorPage> createState() => _AiAppGeneratorPageState();
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(create: (_) => AiAppGeneratorProvider(), child: const _AiAppGeneratorPageView());
+  }
 }
 
-class _AiAppGeneratorPageState extends State<AiAppGeneratorPage> {
+class _AiAppGeneratorPageView extends StatefulWidget {
+  const _AiAppGeneratorPageView();
+
+  @override
+  State<_AiAppGeneratorPageView> createState() => _AiAppGeneratorPageState();
+}
+
+class _AiAppGeneratorPageState extends State<_AiAppGeneratorPageView> {
   final TextEditingController _promptController = TextEditingController();
   final FocusNode _promptFocusNode = FocusNode();
   bool _isDescriptionExpanded = false;
@@ -28,7 +37,7 @@ class _AiAppGeneratorPageState extends State<AiAppGeneratorPage> {
   @override
   void initState() {
     super.initState();
-    MixpanelManager().aiAppGeneratorPageOpened();
+    PlatformManager.instance.analytics.aiAppGeneratorPageOpened();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final provider = context.read<AiAppGeneratorProvider>();
       provider.setAppProvider(context.read<AppProvider>());
@@ -273,7 +282,7 @@ class _AiAppGeneratorPageState extends State<AiAppGeneratorPage> {
                     ? Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF6366F1).withOpacity(0.2),
+                          color: const Color(0xFF6366F1).withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Text(
@@ -327,27 +336,27 @@ class _AiAppGeneratorPageState extends State<AiAppGeneratorPage> {
                             color: isCompleted
                                 ? const Color(0xFF6366F1)
                                 : isActive
-                                ? const Color(0xFF6366F1).withOpacity(0.2)
-                                : const Color(0xFF2A2A2E),
+                                    ? const Color(0xFF6366F1).withValues(alpha: 0.2)
+                                    : const Color(0xFF2A2A2E),
                             border: isActive ? Border.all(color: const Color(0xFF6366F1), width: 2) : null,
                           ),
                           child: Center(
                             child: isCompleted
                                 ? const FaIcon(FontAwesomeIcons.check, color: Colors.white, size: 12)
                                 : isActive
-                                ? const SizedBox(
-                                    width: 14,
-                                    height: 14,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      valueColor: AlwaysStoppedAnimation(Color(0xFF6366F1)),
-                                    ),
-                                  )
-                                : Container(
-                                    width: 8,
-                                    height: 8,
-                                    decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.grey.shade600),
-                                  ),
+                                    ? const SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor: AlwaysStoppedAnimation(Color(0xFF6366F1)),
+                                        ),
+                                      )
+                                    : Container(
+                                        width: 8,
+                                        height: 8,
+                                        decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.grey.shade600),
+                                      ),
                           ),
                         ),
                         const SizedBox(width: 14),
@@ -743,7 +752,7 @@ class _AiAppGeneratorPageState extends State<AiAppGeneratorPage> {
                             borderRadius: BorderRadius.circular(12),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.3),
+                                color: Colors.black.withValues(alpha: 0.3),
                                 blurRadius: 8,
                                 offset: const Offset(0, 2),
                               ),
@@ -788,7 +797,7 @@ class _AiAppGeneratorPageState extends State<AiAppGeneratorPage> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF6366F1).withOpacity(0.15),
+                              color: const Color(0xFF6366F1).withValues(alpha: 0.15),
                               borderRadius: BorderRadius.circular(16),
                             ),
                             child: Row(
@@ -817,7 +826,7 @@ class _AiAppGeneratorPageState extends State<AiAppGeneratorPage> {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF22C55E).withOpacity(0.15),
+                                color: const Color(0xFF22C55E).withValues(alpha: 0.15),
                                 borderRadius: BorderRadius.circular(16),
                               ),
                               child: Row(
@@ -839,7 +848,7 @@ class _AiAppGeneratorPageState extends State<AiAppGeneratorPage> {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF22C55E).withOpacity(0.15),
+                                color: const Color(0xFF22C55E).withValues(alpha: 0.15),
                                 borderRadius: BorderRadius.circular(16),
                               ),
                               child: Text(
@@ -913,7 +922,7 @@ class _AiAppGeneratorPageState extends State<AiAppGeneratorPage> {
     );
   }
 
-  Widget _buildFeatureRow({required IconData icon, required String description}) {
+  Widget _buildFeatureRow({required FaIconData icon, required String description}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -1009,7 +1018,7 @@ class _AiAppGeneratorPageState extends State<AiAppGeneratorPage> {
   }
 
   Widget _buildSettingRow({
-    required IconData icon,
+    required FaIconData icon,
     required String title,
     required String subtitle,
     required bool value,
@@ -1038,7 +1047,7 @@ class _AiAppGeneratorPageState extends State<AiAppGeneratorPage> {
             ],
           ),
         ),
-        Switch(value: value, onChanged: onChanged, activeColor: activeColor),
+        Switch(value: value, onChanged: onChanged, activeThumbColor: activeColor),
       ],
     );
   }
@@ -1094,9 +1103,9 @@ class _AiAppGeneratorPageState extends State<AiAppGeneratorPage> {
 
   Future<void> _generateApp(AiAppGeneratorProvider provider) async {
     FocusScope.of(context).unfocus();
-    MixpanelManager().aiAppGeneratorPromptSubmitted(promptLength: _promptController.text.length);
+    PlatformManager.instance.analytics.aiAppGeneratorPromptSubmitted(promptLength: _promptController.text.length);
     await provider.generateApp(_promptController.text);
-    MixpanelManager().aiAppGeneratorAppGenerated(success: provider.hasGeneratedApp);
+    PlatformManager.instance.analytics.aiAppGeneratorAppGenerated(success: provider.hasGeneratedApp);
   }
 
   Future<void> _submitApp(AiAppGeneratorProvider provider) async {

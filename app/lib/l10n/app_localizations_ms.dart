@@ -9,6 +9,9 @@ class AppLocalizationsMs extends AppLocalizations {
   AppLocalizationsMs([String locale = 'ms']) : super(locale);
 
   @override
+  String get sessionExpiredSignInAgain => 'Sesi tamat tempoh — log masuk semula.';
+
+  @override
   String get appTitle => 'Omi';
 
   @override
@@ -62,6 +65,12 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get copySummary => 'Salin ringkasan';
+
+  @override
+  String get copyConversationId => 'Salin ID perbualan';
+
+  @override
+  String get conversationIdCopied => 'ID perbualan disalin ke papan klip';
 
   @override
   String get testPrompt => 'Uji Gesaan';
@@ -423,6 +432,12 @@ class AppLocalizationsMs extends AppLocalizations {
   String get offlineSync => 'Segerak Luar Talian';
 
   @override
+  String get autoSync => 'Penyegerakan automatik';
+
+  @override
+  String get autoSyncDescription => 'Segerakkan rakaman luar talian secara automatik apabila peranti anda disambungkan';
+
+  @override
   String get deviceSettings => 'Tetapan Peranti';
 
   @override
@@ -634,9 +649,6 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get saving => 'Menyimpan...';
-
-  @override
-  String get personaConfig => 'Konfigurasikan persona AI anda';
 
   @override
   String get beta => 'BETA';
@@ -959,11 +971,6 @@ class AppLocalizationsMs extends AppLocalizations {
   @override
   String insightsUsedThisMonth(String used, String limit) {
     return '$used daripada $limit wawasan diperoleh bulan ini';
-  }
-
-  @override
-  String memoriesUsedThisMonth(String used, String limit) {
-    return '$used daripada $limit ingatan dicipta bulan ini';
   }
 
   @override
@@ -1466,7 +1473,7 @@ class AppLocalizationsMs extends AppLocalizations {
   String get payYourSttProvider => 'Gunakan omi secara bebas. Anda hanya membayar penyedia STT anda secara langsung.';
 
   @override
-  String get freeMinutesMonth => '1,200 minit percuma/bulan disertakan. Tanpa had dengan ';
+  String get freeMinutesMonth => '300 minit percuma/bulan disertakan. Tanpa had dengan ';
 
   @override
   String get omiUnlimited => 'Omi Tanpa Had';
@@ -1645,7 +1652,7 @@ class AppLocalizationsMs extends AppLocalizations {
   String get finalTouches => 'Sentuhan akhir';
 
   @override
-  String get processing => 'Memproses...';
+  String get processing => 'Memproses';
 
   @override
   String get features => 'Ciri-ciri';
@@ -1790,21 +1797,7 @@ class AppLocalizationsMs extends AppLocalizations {
   String get lovingOmi => 'Suka Omi?';
 
   @override
-  String get leaveReviewIos =>
-      'Bantu kami menjangkau lebih ramai orang dengan meninggalkan ulasan di App Store. Maklum balas anda sangat bermakna bagi kami!';
-
-  @override
-  String get leaveReviewAndroid =>
-      'Bantu kami menjangkau lebih ramai orang dengan meninggalkan ulasan di Google Play Store. Maklum balas anda sangat bermakna bagi kami!';
-
-  @override
-  String get rateOnAppStore => 'Nilai di App Store';
-
-  @override
-  String get rateOnGooglePlay => 'Nilai di Google Play';
-
-  @override
-  String get maybeLater => 'Mungkin Kemudian';
+  String get maybeLater => 'Mungkin nanti';
 
   @override
   String get speechProfileIntro => 'Omi perlu mempelajari matlamat dan suara anda. Anda boleh mengubahnya kemudian.';
@@ -2142,6 +2135,18 @@ class AppLocalizationsMs extends AppLocalizations {
   String get editMemory => '✏️ Edit Memori';
 
   @override
+  String get pinAsBaseline => 'Pin as Baseline';
+
+  @override
+  String get unpinAsBaseline => 'Unpin from Baseline';
+
+  @override
+  String get baselineMemory => 'Baseline Memory';
+
+  @override
+  String get alwaysInContext => 'Always in context';
+
+  @override
   String get memoryContentHint => 'Saya suka makan ais krim...';
 
   @override
@@ -2380,6 +2385,9 @@ class AppLocalizationsMs extends AppLocalizations {
   String get batteryLevel => 'Tahap Bateri';
 
   @override
+  String get charging => 'Mengecas';
+
+  @override
   String get productUpdate => 'Kemas Kini Produk';
 
   @override
@@ -2432,12 +2440,6 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get createKeyToGetStarted => 'Cipta kunci untuk bermula';
-
-  @override
-  String get persona => 'Persona';
-
-  @override
-  String get configureYourAiPersona => 'Konfigurasikan persona AI anda';
 
   @override
   String get configureSttProvider => 'Konfigurasikan pembekal STT';
@@ -2512,12 +2514,6 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get trackPersonalGoalsOnHomepage => 'Jejaki matlamat peribadi anda di laman utama';
-
-  @override
-  String get dailyReflection => 'Refleksi Harian';
-
-  @override
-  String get get9PmReminderToReflect => 'Dapatkan peringatan jam 9 malam untuk merenung hari anda';
 
   @override
   String get actionItemDescriptionCannotBeEmpty => 'Penerangan item tindakan tidak boleh kosong';
@@ -2955,9 +2951,6 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get aboutTheApp => 'Tentang Aplikasi';
-
-  @override
-  String get aboutThePersona => 'Tentang Persona';
 
   @override
   String get chatPersonality => 'Personaliti Sembang';
@@ -3495,9 +3488,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String get changeYourName => 'Tukar Nama Anda';
 
   @override
-  String get manageYourOmiPersona => 'Urus persona Omi anda';
-
-  @override
   String get voiceAndPeople => 'Suara & Orang';
 
   @override
@@ -3908,9 +3898,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String get shortcutChangeInstruction => 'Klik pada pintasan untuk mengubahnya. Tekan Escape untuk membatalkan.';
 
   @override
-  String get configurePersonaDescription => 'Konfigurasikan persona AI anda';
-
-  @override
   String get configureSTTProvider => 'Konfigurasikan pembekal STT';
 
   @override
@@ -3946,10 +3933,6 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get trackPersonalGoals => 'Jejaki matlamat peribadi pada laman utama';
-
-  @override
-  String get dailyReflectionDescription =>
-      'Terima peringatan pada jam 9 malam untuk merenung hari anda dan mencatat fikiran anda.';
 
   @override
   String get endpointURL => 'URL Titik Akhir';
@@ -4265,16 +4248,7 @@ class AppLocalizationsMs extends AppLocalizations {
   String get createAndShareYourApp => 'Cipta dan kongsi aplikasi anda';
 
   @override
-  String get createMyClone => 'Cipta Klon Saya';
-
-  @override
-  String get createYourDigitalClone => 'Cipta klon digital anda';
-
-  @override
   String get itemApp => 'Aplikasi';
-
-  @override
-  String get itemPersona => 'Persona';
 
   @override
   String keepItemPublic(String item) {
@@ -4303,9 +4277,6 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get manageApp => 'Urus Aplikasi';
-
-  @override
-  String get updatePersonaDetails => 'Kemas Kini Butiran Persona';
 
   @override
   String deleteItemTitle(String item) {
@@ -4576,12 +4547,12 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String planEndedOn(String date) {
-    return 'Pelan anda tamat pada $date.\\nLanggan semula sekarang - anda akan dicaj serta-merta untuk tempoh pengebilan baharu.';
+    return 'Pelan anda tamat pada $date.\nLanggan semula sekarang - anda akan dicaj serta-merta untuk tempoh pengebilan baharu.';
   }
 
   @override
   String planSetToCancelOn(String date) {
-    return 'Pelan anda ditetapkan untuk dibatalkan pada $date.\\nLanggan semula sekarang untuk mengekalkan manfaat anda - tiada caj sehingga $date.';
+    return 'Pelan anda ditetapkan untuk dibatalkan pada $date.\nLanggan semula sekarang untuk mengekalkan manfaat anda - tiada caj sehingga $date.';
   }
 
   @override
@@ -4609,10 +4580,10 @@ class AppLocalizationsMs extends AppLocalizations {
   String get alreadyBestValuePlan => 'Anda sudah mempunyai pelan nilai terbaik. Tiada perubahan diperlukan.';
 
   @override
-  String get unableToLoadPlans => 'Tidak dapat memuatkan pelan';
+  String get unableToLoadPlans => 'Gagal memuatkan pelan';
 
   @override
-  String get checkConnectionTryAgain => 'Sila semak sambungan anda dan cuba lagi';
+  String get checkConnectionTryAgain => 'Semak sambungan anda dan cuba lagi';
 
   @override
   String get useFreePlan => 'Gunakan Pelan Percuma';
@@ -4677,41 +4648,13 @@ class AppLocalizationsMs extends AppLocalizations {
       'Terima kasih kerana menjadi pengguna Omi yang dihargai. Jika anda mempunyai sebarang soalan atau kebimbangan, sila hubungi kami di team@basedhardware.com.';
 
   @override
-  String get wifiSyncSettings => 'Tetapan Segerak WiFi';
-
-  @override
-  String get enterHotspotCredentials => 'Masukkan kelayakan hotspot telefon anda';
-
-  @override
-  String get wifiSyncUsesHotspot =>
-      'Segerak WiFi menggunakan telefon anda sebagai hotspot. Cari nama dan kata laluan di Tetapan > Hotspot Peribadi.';
-
-  @override
-  String get hotspotNameSsid => 'Nama Hotspot (SSID)';
-
-  @override
-  String get exampleIphoneHotspot => 'cth. iPhone Hotspot';
-
-  @override
   String get password => 'Kata Laluan';
-
-  @override
-  String get enterHotspotPassword => 'Masukkan kata laluan hotspot';
 
   @override
   String get saveCredentials => 'Simpan Kelayakan';
 
   @override
   String get clearCredentials => 'Kosongkan Kelayakan';
-
-  @override
-  String get pleaseEnterHotspotName => 'Sila masukkan nama hotspot';
-
-  @override
-  String get wifiCredentialsSaved => 'Kelayakan WiFi disimpan';
-
-  @override
-  String get wifiCredentialsCleared => 'Kelayakan WiFi dikosongkan';
 
   @override
   String summaryGeneratedForDate(String date) {
@@ -4780,7 +4723,7 @@ class AppLocalizationsMs extends AppLocalizations {
   String get noSpecificDataAccessConfigured => 'Tiada akses data khusus dikonfigurasi.';
 
   @override
-  String get basicPlanDescription => '1,200 minit premium + tanpa had pada peranti';
+  String get basicPlanDescription => '300 minit premium + tanpa had pada peranti';
 
   @override
   String get minutes => 'minit';
@@ -5148,7 +5091,7 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get consentDataMessage =>
-      'Dengan meneruskan, semua data yang anda kongsi dengan aplikasi ini (termasuk perbualan, rakaman dan maklumat peribadi anda) akan disimpan dengan selamat di pelayan kami untuk memberikan anda cerapan berkuasa AI dan membolehkan semua ciri aplikasi.';
+      'Dengan meneruskan, perbualan, rakaman dan maklumat peribadi anda akan disimpan dengan selamat di pelayan kami. Rakaman audio dan transkrip anda diproses oleh perkhidmatan AI pihak ketiga (termasuk Deepgram untuk transkripsi dan OpenAI untuk analisis) untuk memberikan anda pandangan dikuasakan AI dan membolehkan semua ciri aplikasi.';
 
   @override
   String get tasksEmptyStateMessage =>
@@ -5837,9 +5780,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String get chooseFile => 'Pilih Fail';
 
   @override
-  String get configureAiPersona => 'Konfigurasikan persona AI anda';
-
-  @override
   String get connectAiAssistantsToYourData => 'Sambungkan pembantu AI ke data anda';
 
   @override
@@ -5864,9 +5804,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String get limitless => 'Limitless';
 
   @override
-  String get fastTransfer => 'Pemindahan Pantas';
-
-  @override
   String get syncingStatus => 'Menyegerakkan';
 
   @override
@@ -5876,15 +5813,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String etaLabel(String time) {
     return 'Anggaran: $time';
   }
-
-  @override
-  String get transferMethod => 'Kaedah Pemindahan';
-
-  @override
-  String get fast => 'Pantas';
-
-  @override
-  String get ble => 'BLE';
 
   @override
   String get phone => 'Telefon';
@@ -5905,25 +5833,7 @@ class AppLocalizationsMs extends AppLocalizations {
   String get processedFilesDeleted => 'Fail yang diproses telah dipadam';
 
   @override
-  String get wifiEnableFailed => 'Gagal mengaktifkan WiFi pada peranti. Sila cuba lagi.';
-
-  @override
-  String get deviceNoFastTransfer => 'Peranti anda tidak menyokong Pemindahan Pantas. Gunakan Bluetooth sebaliknya.';
-
-  @override
-  String get enableHotspotMessage => 'Sila aktifkan hotspot telefon anda dan cuba lagi.';
-
-  @override
-  String get transferStartFailed => 'Gagal memulakan pemindahan. Sila cuba lagi.';
-
-  @override
   String get deviceNotResponding => 'Peranti tidak bertindak balas. Sila cuba lagi.';
-
-  @override
-  String get invalidWifiCredentials => 'Kelayakan WiFi tidak sah. Semak tetapan hotspot anda.';
-
-  @override
-  String get wifiConnectionFailed => 'Sambungan WiFi gagal. Sila cuba lagi.';
 
   @override
   String get sdCardProcessing => 'Memproses Kad SD';
@@ -5935,9 +5845,6 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get process => 'Proses';
-
-  @override
-  String get wifiSyncFailed => 'Segerak WiFi Gagal';
 
   @override
   String get processingFailed => 'Pemprosesan Gagal';
@@ -6110,7 +6017,7 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get premiumMinutesInfo =>
-      '1,200 minit premium/bulan. Tab Pada-Peranti menawarkan transkripsi percuma tanpa had.';
+      '300 minit premium/bulan. Tab Pada-Peranti menawarkan transkripsi percuma tanpa had.';
 
   @override
   String get viewUsage => 'Lihat penggunaan';
@@ -6192,7 +6099,7 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get premiumMinutesMonth =>
-      '1,200 minit premium/bulan. Tab Pada Peranti menawarkan transkripsi percuma tanpa had. ';
+      '300 minit premium/bulan. Tab Pada Peranti menawarkan transkripsi percuma tanpa had. ';
 
   @override
   String get audioProcessedLocally =>
@@ -6551,29 +6458,10 @@ class AppLocalizationsMs extends AppLocalizations {
   String get sharePublicLink => 'Kongsi Pautan Awam';
 
   @override
-  String get makePersonaPublic => 'Jadikan Persona Awam';
-
-  @override
   String get connectedKnowledgeData => 'Data Pengetahuan Tersambung';
 
   @override
   String get enterName => 'Masukkan nama';
-
-  @override
-  String get disconnectTwitter => 'Putuskan Sambungan Twitter';
-
-  @override
-  String get disconnectTwitterConfirmation =>
-      'Adakah anda pasti mahu memutuskan sambungan akaun Twitter anda? Persona anda tidak lagi dikemas kini berdasarkan aktiviti anda.';
-
-  @override
-  String get getOmiDeviceDescription => 'Cipta klon yang lebih tepat dengan perbualan peribadi anda';
-
-  @override
-  String get getOmi => 'Dapatkan Omi';
-
-  @override
-  String get iHaveOmiDevice => 'Saya mempunyai peranti Omi';
 
   @override
   String get goal => 'MATLAMAT';
@@ -6619,7 +6507,7 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String setDefaultAppContent(String appName) {
-    return 'Tetapkan $appName sebagai aplikasi ringkasan lalai anda?\\n\\nAplikasi ini akan digunakan secara automatik untuk semua ringkasan perbualan pada masa hadapan.';
+    return 'Tetapkan $appName sebagai aplikasi ringkasan lalai anda?\n\nAplikasi ini akan digunakan secara automatik untuk semua ringkasan perbualan pada masa hadapan.';
   }
 
   @override
@@ -6734,24 +6622,13 @@ class AppLocalizationsMs extends AppLocalizations {
   }
 
   @override
-  String get wifiSync => 'Penyegerakan WiFi';
-
-  @override
   String itemCopiedToClipboard(String item) {
     return '$item disalin ke papan keratan';
   }
 
   @override
-  String get wifiConnectionFailedTitle => 'Sambungan Gagal';
-
-  @override
   String connectingToDeviceName(String deviceName) {
     return 'Menyambung ke $deviceName';
-  }
-
-  @override
-  String enableDeviceWifi(String deviceName) {
-    return 'Aktifkan WiFi $deviceName';
   }
 
   @override
@@ -6848,9 +6725,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String get statusUnprocessed => 'Belum Diproses';
 
   @override
-  String get switchedToFastTransfer => 'Bertukar ke Pemindahan Pantas';
-
-  @override
   String get transferCompleteMessage => 'Pemindahan selesai! Anda kini boleh memainkan rakaman ini.';
 
   @override
@@ -6862,33 +6736,7 @@ class AppLocalizationsMs extends AppLocalizations {
   String get transferCancelled => 'Pemindahan dibatalkan';
 
   @override
-  String get fastTransferEnabled => 'Pemindahan Pantas diaktifkan';
-
-  @override
   String get bluetoothSyncEnabled => 'Penyegerakan Bluetooth diaktifkan';
-
-  @override
-  String get enableFastTransfer => 'Aktifkan Pemindahan Pantas';
-
-  @override
-  String get fastTransferDescription =>
-      'Pemindahan Pantas menggunakan WiFi untuk kelajuan ~5x lebih pantas. Telefon anda akan bersambung sementara ke rangkaian WiFi peranti Omi semasa pemindahan.';
-
-  @override
-  String get internetAccessPausedDuringTransfer => 'Akses internet dijeda semasa pemindahan';
-
-  @override
-  String get chooseTransferMethodDescription => 'Pilih cara rakaman dipindahkan dari peranti Omi ke telefon anda.';
-
-  @override
-  String get wifiSpeed => '~150 KB/s melalui WiFi';
-
-  @override
-  String get fiveTimesFaster => '5X LEBIH PANTAS';
-
-  @override
-  String get fastTransferMethodDescription =>
-      'Mencipta sambungan WiFi terus ke peranti Omi anda. Telefon anda terputus sementara dari WiFi biasa semasa pemindahan.';
 
   @override
   String get bluetooth => 'Bluetooth';
@@ -6910,7 +6758,15 @@ class AppLocalizationsMs extends AppLocalizations {
   String get lowBatteryAlertTitle => 'Amaran Bateri Lemah';
 
   @override
-  String get lowBatteryAlertBody => 'Bateri peranti anda lemah. Masa untuk mengecas semula! 🔋';
+  String lowBatteryAlertBody(int level) {
+    return 'Bateri anda berada di $level%. Masa untuk mengecas semula! 🔋';
+  }
+
+  @override
+  String get batteryFullyChargedTitle => 'Omi telah dicas penuh';
+
+  @override
+  String get batteryFullyChargedBody => 'Peranti Omi anda telah dicas sepenuhnya. Anda boleh mencabutnya!';
 
   @override
   String get deviceDisconnectedNotificationTitle => 'Peranti Omi Anda Terputus';
@@ -7125,49 +6981,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String get addAppPersonaConflictWithCapabilities => 'Persona tidak boleh dipilih dengan keupayaan lain';
 
   @override
-  String get personaTwitterHandleNotFound => 'Akaun Twitter tidak dijumpai';
-
-  @override
-  String get personaTwitterHandleSuspended => 'Akaun Twitter digantung';
-
-  @override
-  String get personaFailedToVerifyTwitter => 'Gagal mengesahkan akaun Twitter';
-
-  @override
-  String get personaFailedToFetch => 'Gagal mendapatkan persona anda';
-
-  @override
-  String get personaFailedToCreate => 'Gagal mencipta persona';
-
-  @override
-  String get personaConnectKnowledgeSource => 'Sila sambungkan sekurang-kurangnya satu sumber data (Omi atau Twitter)';
-
-  @override
-  String get personaUpdatedSuccessfully => 'Persona berjaya dikemas kini';
-
-  @override
-  String get personaFailedToUpdate => 'Gagal mengemas kini persona';
-
-  @override
-  String get personaPleaseSelectImage => 'Sila pilih imej';
-
-  @override
-  String get personaFailedToCreateTryLater => 'Gagal mencipta persona. Sila cuba lagi nanti.';
-
-  @override
-  String personaFailedToCreateWithError(String error) {
-    return 'Gagal mencipta persona: $error';
-  }
-
-  @override
-  String get personaFailedToEnable => 'Gagal mengaktifkan persona';
-
-  @override
-  String personaErrorEnablingWithError(String error) {
-    return 'Ralat mengaktifkan persona: $error';
-  }
-
-  @override
   String get paymentFailedToFetchCountries => 'Gagal mendapatkan negara yang disokong. Sila cuba lagi nanti.';
 
   @override
@@ -7242,21 +7055,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String get aiGenPleaseGenerateAppFirst => 'Sila jana aplikasi terlebih dahulu';
 
   @override
-  String get xHandleTitle => 'Apakah nama pengguna X anda?';
-
-  @override
-  String get xHandleDescription => 'Kami akan melatih klon Omi anda terlebih dahulu\nberdasarkan aktiviti akaun anda';
-
-  @override
-  String get xHandleHint => '@nikshevchenko';
-
-  @override
-  String get xHandlePleaseEnter => 'Sila masukkan nama pengguna X anda';
-
-  @override
-  String get xHandlePleaseEnterValid => 'Sila masukkan nama pengguna X yang sah';
-
-  @override
   String get nextButton => 'Seterusnya';
 
   @override
@@ -7313,12 +7111,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String mergeConversationsSuccessBody(int count) {
     return '$count perbualan berjaya digabungkan';
   }
-
-  @override
-  String get dailyReflectionNotificationTitle => 'Masa untuk Refleksi Harian';
-
-  @override
-  String get dailyReflectionNotificationBody => 'Ceritakan tentang hari anda';
 
   @override
   String get actionItemReminderTitle => 'Peringatan Omi';
@@ -7644,13 +7436,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String get voiceFailedToTranscribe => 'Gagal mentranskrip audio';
 
   @override
-  String get locationPermissionRequired => 'Kebenaran lokasi diperlukan';
-
-  @override
-  String get locationPermissionContent =>
-      'Pemindahan Pantas memerlukan kebenaran lokasi untuk mengesahkan sambungan WiFi. Sila berikan kebenaran lokasi untuk meneruskan.';
-
-  @override
   String get pdfTranscriptExport => 'Eksport Transkrip';
 
   @override
@@ -7795,12 +7580,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String get dailyRecapsDescription => 'Ringkasan harian anda akan muncul di sini setelah dijana';
 
   @override
-  String get chooseTransferMethod => 'Pilih kaedah pemindahan';
-
-  @override
-  String get fastTransferSpeed => '~150 KB/s melalui WiFi';
-
-  @override
   String largeTimeGapDetected(String gap) {
     return 'Jurang masa besar dikesan ($gap)';
   }
@@ -7809,10 +7588,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String largeTimeGapsDetected(String gaps) {
     return 'Jurang masa besar dikesan ($gaps)';
   }
-
-  @override
-  String get deviceDoesNotSupportWifiSwitchingToBle =>
-      'Peranti tidak menyokong penyegerakan WiFi, bertukar kepada Bluetooth';
 
   @override
   String get appleHealthNotAvailable => 'Apple Health tidak tersedia pada peranti ini';
@@ -7864,9 +7639,6 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get categoryConversationAnalysis => 'Analisis Perbualan';
-
-  @override
-  String get categoryPersonalityClone => 'Klon Personaliti';
 
   @override
   String get categoryHealth => 'Kesihatan';
@@ -7971,9 +7743,6 @@ class AppLocalizationsMs extends AppLocalizations {
   String get capabilityIntegrations => 'Integrasi';
 
   @override
-  String get categoryPersonalityClones => 'Klon Personaliti';
-
-  @override
   String get categoryProductivityLifestyle => 'Produktiviti & Gaya Hidup';
 
   @override
@@ -8017,6 +7786,9 @@ class AppLocalizationsMs extends AppLocalizations {
 
   @override
   String get viewAll => 'Lihat semua';
+
+  @override
+  String get expand => 'Kembangkan';
 
   @override
   String get addTask => 'Tambah tugas';
@@ -8443,6 +8215,12 @@ class AppLocalizationsMs extends AppLocalizations {
   String get phoneCallSettingsTitle => 'Tetapan panggilan';
 
   @override
+  String get showPhoneCallButtonTitle => 'Tunjuk Butang Panggilan';
+
+  @override
+  String get showPhoneCallButtonDesc => 'Paparkan butang panggilan telefon pada skrin utama';
+
+  @override
   String get yourVerifiedNumbers => 'Nombor anda yang disahkan';
 
   @override
@@ -8578,7 +8356,7 @@ class AppLocalizationsMs extends AppLocalizations {
   String get manageStorage => 'Urus storan';
 
   @override
-  String get safelyBackedUp => 'Disandarkan dengan selamat ke telefon anda';
+  String get safelyBackedUp => 'Perbualan dicipta';
 
   @override
   String get notYetSynced => 'Belum disegerakkan ke telefon anda';
@@ -8970,6 +8748,18 @@ class AppLocalizationsMs extends AppLocalizations {
   }
 
   @override
+  String get batteryHistory => 'Bateri';
+
+  @override
+  String get noBatteryDataYet => 'Tiada data bateri lagi';
+
+  @override
+  String get day => 'Hari';
+
+  @override
+  String get week => 'Minggu';
+
+  @override
   String get rollbackToStableFirmware => 'Kembali ke firmware stabil';
 
   @override
@@ -9004,8 +8794,1006 @@ class AppLocalizationsMs extends AppLocalizations {
   String get willSyncAutomatically => 'akan disegerakkan secara automatik';
 
   @override
-  String get enableLocationTitle => 'Enable Location';
+  String get enableLocationTitle => 'Aktifkan Lokasi';
 
   @override
-  String get enableLocationDescription => 'Location permission is needed to find nearby Bluetooth devices.';
+  String get enableLocationDescription => 'Kebenaran lokasi diperlukan untuk mencari peranti Bluetooth berdekatan.';
+
+  @override
+  String get voiceRecordingFound => 'Rakaman ditemui';
+
+  @override
+  String get transcriptionConnecting => 'Menyambung transkripsi...';
+
+  @override
+  String get transcriptionReconnecting => 'Menyambung semula transkripsi...';
+
+  @override
+  String get transcriptionUnavailable => 'Transkripsi tidak tersedia';
+
+  @override
+  String get audioOutput => 'Output audio';
+
+  @override
+  String get firmwareWarningTitle => 'Penting: Baca Sebelum Mengemas Kini';
+
+  @override
+  String get firmwareFormatWarning =>
+      'Firmware ini akan memformat kad SD. Sila pastikan semua data luar talian telah disegerakkan sebelum menaik taraf.\n\nJika anda melihat lampu merah berkelip selepas memasang versi ini, jangan risau. Sambungkan sahaja peranti ke aplikasi dan ia sepatutnya bertukar biru. Lampu merah bermakna jam peranti belum disegerakkan lagi.';
+
+  @override
+  String get continueAnyway => 'Teruskan';
+
+  @override
+  String get tasksClearCompleted => 'Kosongkan yang selesai';
+
+  @override
+  String get tasksSelectAll => 'Pilih semua';
+
+  @override
+  String tasksDeleteSelected(int count) {
+    return 'Padam $count tugas';
+  }
+
+  @override
+  String get tasksMarkComplete => 'Ditandai selesai';
+
+  @override
+  String get appleHealthManageNote =>
+      'Omi mengakses Apple Health melalui rangka kerja HealthKit Apple. Anda boleh membatalkan akses pada bila-bila masa dalam Tetapan iOS.';
+
+  @override
+  String get appleHealthConnectCta => 'Sambung ke Apple Health';
+
+  @override
+  String get appleHealthDisconnectCta => 'Putuskan Apple Health';
+
+  @override
+  String get appleHealthConnectedBadge => 'Disambungkan';
+
+  @override
+  String get appleHealthFeatureChatTitle => 'Berbual tentang kesihatan anda';
+
+  @override
+  String get appleHealthFeatureChatDesc => 'Tanyakan Omi tentang langkah, tidur, kadar jantung dan latihan anda.';
+
+  @override
+  String get appleHealthFeatureReadOnlyTitle => 'Akses baca sahaja';
+
+  @override
+  String get appleHealthFeatureReadOnlyDesc => 'Omi tidak pernah menulis ke Apple Health atau mengubah data anda.';
+
+  @override
+  String get appleHealthFeatureSecureTitle => 'Penyegerakan selamat';
+
+  @override
+  String get appleHealthFeatureSecureDesc => 'Data Apple Health anda disegerakkan secara peribadi ke akaun Omi.';
+
+  @override
+  String get appleHealthDeniedTitle => 'Akses Apple Health ditolak';
+
+  @override
+  String get appleHealthDeniedBody =>
+      'Omi tidak mempunyai kebenaran membaca data Apple Health anda. Dayakan di Tetapan iOS → Privasi & Keselamatan → Health → Omi.';
+
+  @override
+  String get deleteFlowReasonTitle => 'Mengapa anda pergi?';
+
+  @override
+  String get deleteFlowReasonSubtitle => 'Maklum balas anda membantu kami menambah baik Omi untuk semua orang.';
+
+  @override
+  String get deleteReasonPrivacy => 'Kebimbangan privasi';
+
+  @override
+  String get deleteReasonNotUsing => 'Tidak cukup kerap menggunakannya';
+
+  @override
+  String get deleteReasonMissingFeatures => 'Ciri yang saya perlukan tiada';
+
+  @override
+  String get deleteReasonTechnicalIssues => 'Terlalu banyak masalah teknikal';
+
+  @override
+  String get deleteReasonFoundAlternative => 'Menggunakan sesuatu yang lain';
+
+  @override
+  String get deleteReasonTakingBreak => 'Hanya berehat sebentar';
+
+  @override
+  String get deleteReasonOther => 'Lain-lain';
+
+  @override
+  String get deleteFlowFeedbackTitle => 'Beritahu kami lebih lanjut';
+
+  @override
+  String get deleteFlowFeedbackSubtitle => 'Apakah yang akan menjadikan Omi sesuai untuk anda?';
+
+  @override
+  String get deleteFlowFeedbackHint => 'Pilihan — pandangan anda membantu kami membina produk yang lebih baik.';
+
+  @override
+  String get deleteFlowConfirmTitle => 'Ini adalah kekal';
+
+  @override
+  String get deleteFlowConfirmSubtitle => 'Setelah anda memadam akaun, tiada cara untuk memulihkannya.';
+
+  @override
+  String get deleteConsequenceSubscription => 'Sebarang langganan aktif akan dibatalkan.';
+
+  @override
+  String get deleteConsequenceNoRecovery => 'Akaun anda tidak boleh dipulihkan — walaupun oleh sokongan.';
+
+  @override
+  String get deleteTypeToConfirm => 'Taip DELETE untuk sahkan';
+
+  @override
+  String get deleteConfirmationWord => 'DELETE';
+
+  @override
+  String get deleteAccountPermanently => 'Padam akaun secara kekal';
+
+  @override
+  String get keepMyAccount => 'Kekalkan akaun saya';
+
+  @override
+  String get deleteAccountFailed => 'Tidak dapat memadam akaun anda. Sila cuba lagi.';
+
+  @override
+  String get planUpdate => 'Kemas Kini Pelan';
+
+  @override
+  String get planDeprecationMessage =>
+      'Pelan Unlimited anda sedang ditamatkan. Tukar ke pelan Operator — ciri-ciri hebat yang sama pada \$49/bulan. Pelan semasa anda akan terus berfungsi buat sementara waktu.';
+
+  @override
+  String get upgradeYourPlan => 'Naik Taraf Pelan Anda';
+
+  @override
+  String get youAreOnAPaidPlan => 'Anda menggunakan pelan berbayar.';
+
+  @override
+  String get chatTitle => 'Sembang';
+
+  @override
+  String get chatMessages => 'mesej';
+
+  @override
+  String get unlimitedChatThisMonth => 'Mesej sembang tanpa had bulan ini';
+
+  @override
+  String chatUsedOfLimitCompute(String used, String limit) {
+    return '$used daripada $limit bajet pengiraan digunakan';
+  }
+
+  @override
+  String chatUsedOfLimitMessages(String used, String limit) {
+    return '$used daripada $limit mesej digunakan bulan ini';
+  }
+
+  @override
+  String chatUsageProgress(String used, String limit) {
+    return '$used / $limit digunakan';
+  }
+
+  @override
+  String get chatLimitReachedUpgrade => 'Had sembang dicapai. Naik taraf untuk lebih banyak mesej.';
+
+  @override
+  String get chatLimitReachedTitle => 'Had sembang dicapai';
+
+  @override
+  String chatUsageDescription(String used, String limitDisplay, String plan) {
+    return 'Anda telah menggunakan $used daripada $limitDisplay pada pelan $plan.';
+  }
+
+  @override
+  String resetsInDays(int count) {
+    return 'Set semula dalam $count hari';
+  }
+
+  @override
+  String resetsInHours(int count) {
+    return 'Set semula dalam $count jam';
+  }
+
+  @override
+  String get resetsSoon => 'Set semula tidak lama lagi';
+
+  @override
+  String get upgradePlan => 'Naik taraf pelan';
+
+  @override
+  String get billingMonthly => 'Bulanan';
+
+  @override
+  String get billingYearly => 'Tahunan';
+
+  @override
+  String savePercent(int percent) {
+    return 'Jimat ~$percent%';
+  }
+
+  @override
+  String get popular => 'Popular';
+
+  @override
+  String get currentPlan => 'Semasa';
+
+  @override
+  String neoSubtitle(int count) {
+    return '$count soalan sebulan';
+  }
+
+  @override
+  String operatorSubtitle(int count) {
+    return '$count soalan sebulan';
+  }
+
+  @override
+  String get architectSubtitle => 'AI kuasa — ribuan sembang + automasi ejen';
+
+  @override
+  String chatUsageCost(String used, String limit) {
+    return 'Sembang: \$$used / \$$limit digunakan bulan ini';
+  }
+
+  @override
+  String chatUsageCostNoLimit(String used) {
+    return 'Sembang: \$$used digunakan bulan ini';
+  }
+
+  @override
+  String chatUsageMessages(String used, String limit) {
+    return 'Sembang: $used / $limit mesej bulan ini';
+  }
+
+  @override
+  String chatUsageMessagesNoLimit(String used) {
+    return 'Sembang: $used mesej bulan ini';
+  }
+
+  @override
+  String get chatQuotaSubtitle => 'AI chat messages used with Omi this month.';
+
+  @override
+  String get chatQuotaExceededReply =>
+      'Anda telah mencapai had bulanan. Naik taraf untuk terus bersembang dengan Omi tanpa sekatan.';
+
+  @override
+  String get voiceResponseAudio => 'Baca respons Omi dengan kuat';
+
+  @override
+  String get voiceResponseMode => 'Respons suara';
+
+  @override
+  String get voiceResponseModeTitle => 'Bila respons dituturkan';
+
+  @override
+  String get voiceResponseOff => 'Mati';
+
+  @override
+  String get voiceResponseHeadphonesOnly => 'Fon kepala sahaja';
+
+  @override
+  String get voiceResponseAlways => 'Sentiasa';
+
+  @override
+  String get agreeAndContinue => 'Setuju & Teruskan';
+
+  @override
+  String get startVoiceRecording => 'Mula rakaman suara';
+
+  @override
+  String get startCallRecording => 'Mula rakaman panggilan';
+
+  @override
+  String get mindMap => 'Mind Map';
+
+  @override
+  String get voiceMode => 'Mod Suara';
+
+  @override
+  String get quickActionAskOmi => 'Tanya Omi apa sahaja';
+
+  @override
+  String get record => 'Rakam';
+
+  @override
+  String get stop => 'Hentikan';
+
+  @override
+  String get recordWithPhoneMic => 'Rakam dengan mikrofon telefon';
+
+  @override
+  String get recordWithPhoneMicSubtitle => 'Tangkap audio di sekeliling anda';
+
+  @override
+  String get phoneCall => 'Panggilan telefon';
+
+  @override
+  String get phoneCallSubtitle => 'Rakam panggilan dengan transkripsi langsung';
+
+  @override
+  String get searchActionItems => 'Cari item tindakan';
+
+  @override
+  String get selectActionItems => 'Pilih beberapa';
+
+  @override
+  String chooseExportDestination(int count) {
+    return 'Eksport $count item ke…';
+  }
+
+  @override
+  String get bulkExportInProgress => 'Mengeksport…';
+
+  @override
+  String bulkExportSuccess(int count, String platform) {
+    return 'Dieksport $count ke $platform';
+  }
+
+  @override
+  String bulkExportPartial(int success, int total, String platform) {
+    return 'Dieksport $success daripada $total ke $platform';
+  }
+
+  @override
+  String get showCompletedTasks => 'Tunjukkan selesai';
+
+  @override
+  String get hideCompletedTasks => 'Sembunyikan selesai';
+
+  @override
+  String get selectAllTasksMenu => 'Pilih semua';
+
+  @override
+  String get connectTaskAppToExport => 'Sambungkan aplikasi tugas dalam Tetapan untuk mengeksport';
+
+  @override
+  String get connectAction => 'Sambung';
+
+  @override
+  String get deselectAllTasksMenu => 'Nyahpilih semua';
+
+  @override
+  String get bulkExportAlreadyExported => 'Semua tugasan yang dipilih telah dieksport';
+
+  @override
+  String get bulkDeleteFailed => 'Tidak dapat memadam tugasan. Sila cuba lagi.';
+
+  @override
+  String get deleteRecap => 'Padam ringkasan';
+
+  @override
+  String get deleteRecapConfirmTitle => 'Padam ringkasan ini?';
+
+  @override
+  String get deleteRecapConfirmBody =>
+      'Ringkasan ini akan dibuang secara kekal. Perbualan asal pada hari itu tidak terjejas.';
+
+  @override
+  String get deleteRecapAction => 'Padam';
+
+  @override
+  String get recapDeletedSnackbar => 'Ringkasan dipadam';
+
+  @override
+  String get recapDeleteFailed => 'Tidak dapat memadam ringkasan. Cuba lagi kemudian.';
+
+  @override
+  String get syncStatusBackedUp => 'Telah disandarkan';
+
+  @override
+  String get syncStatusBackingUp => 'Menyegerakkan…';
+
+  @override
+  String get syncStatusWaiting => 'Menunggu untuk segerak';
+
+  @override
+  String get syncStatusRetrying => 'Gagal diproses — mencuba semula';
+
+  @override
+  String get syncStatusFailed => 'Gagal — ketik Cuba Lagi';
+
+  @override
+  String get syncStatusFileUnavailable => 'Fail tidak tersedia';
+
+  @override
+  String get noRecordingsYet => 'Belum ada rakaman';
+
+  @override
+  String get syncInProgress => 'Penyegerakan sedang berjalan';
+
+  @override
+  String get syncStatusUploaded => 'Dimuat naik · diproses di Omi';
+
+  @override
+  String get deleteWhileProcessingTitle => 'Masih diproses';
+
+  @override
+  String get deleteWhileProcessingMessage =>
+      'Rakaman ini telah dimuat naik tetapi Omi masih mencipta perbualan. Jika anda padam sekarang dan pemprosesan gagal, ia tidak dapat dipulihkan. Padam juga?';
+
+  @override
+  String get syncCardAllBackedUp => 'Semua rakaman tersegerak';
+
+  @override
+  String syncCardReadyCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count rakaman sedia untuk disegerakkan',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get syncCardProcessing => 'Memproses di Omi…';
+
+  @override
+  String get syncCardWaitingInternet => 'Menunggu internet';
+
+  @override
+  String syncCardNeedsAttention(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count rakaman memerlukan perhatian',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get syncFlowIntro =>
+      'Rakaman dipindahkan daripada peranti anda ke telefon ini dan disimpan secara setempat, kemudian dimuat naik ke pelayan Omi tempat ia ditranskripsikan dan ditukar menjadi perbualan.';
+
+  @override
+  String get syncStepUpload => 'Segerak';
+
+  @override
+  String get syncStepUploadDesc => 'Rakaman anda dihantar ke pelayan Omi';
+
+  @override
+  String get syncStepProcess => 'Transkripsi';
+
+  @override
+  String get syncStepProcessDesc => 'Omi mengubah audio menjadi perbualan';
+
+  @override
+  String get syncStepBackedUp => 'Perbualan siap';
+
+  @override
+  String get syncStepBackedUpDesc => 'Cari di bawah Perbualan';
+
+  @override
+  String get syncFailureFootnote =>
+      'Jika pemprosesan gagal, rakaman akan dicuba semula secara automatik pada penyegerakan seterusnya.';
+
+  @override
+  String get syncStatusConversationCreated => 'Perbualan dicipta';
+
+  @override
+  String get syncCardUploadingTitle => 'Memuat naik ke Omi';
+
+  @override
+  String get syncCardDownloadingTitle => 'Memuat turun daripada peranti anda';
+
+  @override
+  String syncCardProgressOf(int current, int total) {
+    return '$current daripada $total';
+  }
+
+  @override
+  String get syncStatusOnDevice => 'Pada peranti anda';
+
+  @override
+  String get syncStatusDownloadingFromDevice => 'Memuat turun daripada peranti anda';
+
+  @override
+  String get newestFirst => 'Terbaharu dahulu';
+
+  @override
+  String get noSyncedRecordingsYet => 'Belum ada rakaman yang disegerakkan';
+
+  @override
+  String get morePaymentMethodsComingSoon => 'Lebih banyak kaedah pembayaran akan datang';
+
+  @override
+  String get syncProcessingBackgroundHint => 'Ini berterusan di latar belakang — anda boleh meninggalkan skrin ini.';
+
+  @override
+  String get syncCardRateLimited =>
+      'Had penggunaan saksama telah dicapai — penyegerakan akan disambung semula secara automatik';
+
+  @override
+  String get syncCardBackendBusy =>
+      'Pelayan Omi sedang sibuk — rakaman anda akan disegerakkan apabila kapasiti tersedia semula';
+
+  @override
+  String get unableToDetermineFirmwareVersion => 'Tidak dapat menentukan versi perisian tegar semasa';
+
+  @override
+  String get promoCode => 'Kod promo';
+
+  @override
+  String get enterPromoCode => 'Masukkan kod promo';
+
+  @override
+  String get invalidPromotionCode => 'Kod promo tidak sah.';
+
+  @override
+  String get backgroundModeTitle => 'Mod Latar Belakang';
+
+  @override
+  String get backgroundModeDescription => 'Pastikan Omi anda terus merakam walaupun apl ditutup sepenuhnya.';
+
+  @override
+  String get backgroundModeNote => 'Buat masa ini hanya berfungsi dengan peranti Omi dan sentiasa diperbaiki.';
+
+  @override
+  String get backgroundModeUnavailable =>
+      'Mod Latar Belakang tidak tersedia kerana tiada peranti serasi yang disambungkan. Sambungkan peranti Omi, OpenGlass atau Friend Pendant untuk menggunakan ciri ini.';
+
+  @override
+  String get regenerateRecap => 'Jana semula ringkasan';
+
+  @override
+  String get recapRegeneratedSnackbar => 'Ringkasan dijana semula';
+
+  @override
+  String get recapRegenerateFailed => 'Tidak dapat menjana semula ringkasan. Cuba sebentar lagi.';
+
+  @override
+  String get recapRegenerateCooldown => 'Sila tunggu beberapa saat sebelum menjana semula.';
+
+  @override
+  String get recapRegenerateNoConversations => 'Tiada perbualan untuk diringkaskan untuk hari ini.';
+
+  @override
+  String get syncCustomSttWarningTitle => 'Penyegerakan menggunakan transkripsi Omi';
+
+  @override
+  String get syncCustomSttWarningMessage =>
+      'Anda menggunakan penyedia transkripsi sendiri. Menyegerakkan rakaman ini akan mentranskripsikannya di pelayan Omi dan dikira dalam had transkripsi pelan anda.';
+
+  @override
+  String get transcribeLaterTitle => 'Transkrip Kemudian';
+
+  @override
+  String get transcribeLaterDescription =>
+      'Rakam audio sekarang dan transkripkannya bila perlu, bukan secara langsung. Rakaman disimpan dalam telefon anda, kemudian anda memuat naiknya untuk menghasilkan perbualan.';
+
+  @override
+  String get transcribeLaterNote =>
+      'Berfungsi dengan mikrofon telefon serta peranti Omi dan Limitless. Audio kekal dalam telefon anda sehingga anda memilih untuk memuat naiknya.';
+
+  @override
+  String get transcribeLaterStorageFull =>
+      'Storan telefon anda hampir penuh, jadi rakaman dijeda. Kosongkan ruang atau muat naik rakaman anda, kemudian ia akan disambung semula secara automatik.';
+
+  @override
+  String get recordingMode => 'Mod rakaman';
+
+  @override
+  String get captureModeLater => 'Kemudian';
+
+  @override
+  String get captureModeLiveDescription => 'Transkripsi secara masa nyata semasa anda bercakap.';
+
+  @override
+  String get captureModeLaterDescription => 'Simpan audio sekarang dan transkripsi bila-bila masa.';
+
+  @override
+  String get unmute => 'Nyahsenyap';
+
+  @override
+  String get newRecording => 'Rakaman baharu';
+
+  @override
+  String get transcribeLaterPaused => 'Dijeda — audio tidak dirakam';
+
+  @override
+  String get memoryThisDevice => 'Peranti ini';
+
+  @override
+  String get memoryThisIphone => 'iPhone ini';
+
+  @override
+  String get memoryThisPhone => 'Telefon ini';
+
+  @override
+  String get memoryProvenanceMac => 'Mac';
+
+  @override
+  String get memoryProvenanceIphone => 'iPhone';
+
+  @override
+  String get memoryProvenanceAndroid => 'Android';
+
+  @override
+  String get deviceTutorial => 'Cara Menggunakan Omi';
+
+  @override
+  String get deviceOnboardingTranscriptionTitle => 'Bercakap dengan Omi Anda';
+
+  @override
+  String get deviceOnboardingTranscriptionSubtitle =>
+      'Sebut beberapa patah perkataan dan lihat ia muncul secara langsung';
+
+  @override
+  String get deviceOnboardingGoodJob => 'Syabas!';
+
+  @override
+  String get deviceOnboardingStartSpeaking => 'Mula bercakap...';
+
+  @override
+  String get deviceOnboardingAskQuestionTitle => 'Tanya Omi Satu Soalan';
+
+  @override
+  String get deviceOnboardingAskQuestionSubtitle =>
+      'Tekan butang sekali, sebut soalan anda, kemudian tekan sekali lagi apabila selesai';
+
+  @override
+  String get deviceOnboardingProcessingQuestion => 'Memproses soalan anda...';
+
+  @override
+  String get deviceOnboardingListening => 'Mendengar...';
+
+  @override
+  String get deviceOnboardingTurnOffTitle => 'Matikan';
+
+  @override
+  String get deviceOnboardingTurnOnTitle => 'Hidupkan';
+
+  @override
+  String get deviceOnboardingTurnOffSubtitle => 'Tekan dan tahan butang selama 3 saat';
+
+  @override
+  String get deviceOnboardingTurnOnSubtitle => 'Tekan butang untuk menghidupkannya semula';
+
+  @override
+  String get deviceOnboardingHoldButtonHint => 'Tekan dan tahan butang dengan kemas sehingga lampu padam';
+
+  @override
+  String get deviceOnboardingStatusConnected => 'Bersambung';
+
+  @override
+  String get deviceOnboardingStatusConnectedDone => 'Bersambung!';
+
+  @override
+  String get deviceOnboardingStatusDisconnected => 'Terputus';
+
+  @override
+  String get deviceOnboardingStatusTurningOff => 'Sedang dimatikan...';
+
+  @override
+  String get deviceOnboardingDoubleTapTitle => 'Sesuaikan Ketuk Dua Kali';
+
+  @override
+  String get deviceOnboardingEndConversation => 'Tamatkan Perbualan';
+
+  @override
+  String get deviceOnboardingEndConversationDesc => 'Simpan dan tamatkan perbualan semasa';
+
+  @override
+  String get deviceOnboardingMuteUnmute => 'Senyap / Nyahsenyap';
+
+  @override
+  String get deviceOnboardingMuteUnmuteDesc => 'Hidupkan atau matikan mikrofon';
+
+  @override
+  String get deviceOnboardingStarConversation => 'Bintangkan Perbualan Semasa';
+
+  @override
+  String get deviceOnboardingStarConversationDesc => 'Tandakan perbualan sebagai penting';
+
+  @override
+  String get deviceOnboardingSingleTapHint => 'Itu satu ketukan sahaja — cuba ketuk dua kali dengan pantas!';
+
+  @override
+  String get deviceOnboardingTryDoubleTap => 'Cuba sekarang! Ketuk Omi anda dua kali';
+
+  @override
+  String get deviceOnboardingContinue => 'Teruskan';
+
+  @override
+  String get deviceOnboardingFinish => 'Selesai';
+
+  @override
+  String get deviceOnboardingIntroTitle => 'Kenali Omi Anda';
+
+  @override
+  String get deviceOnboardingIntroSubtitle =>
+      'Lawatan ringkas dan praktikal tentang semua yang Omi anda boleh lakukan.';
+
+  @override
+  String get deviceOnboardingIntroDuration => 'Kira-kira 1 minit';
+
+  @override
+  String get jumpToLatestMessage => 'Lompat ke mesej terkini';
+
+  @override
+  String get latest => 'Terkini';
+
+  @override
+  String get flashFirmware => 'Flash Perisian Tegar';
+
+  @override
+  String get pendantRecordingTitle => 'Merakam pada loket';
+
+  @override
+  String get pendantRecordingNote =>
+      'Loket anda merakam dengan sendirinya. Rakaman disegerakkan ke telefon anda semasa aplikasi dibuka.';
+
+  @override
+  String get pendantSyncingRecordings => 'Menyegerakkan rakaman daripada loket anda…';
+
+  @override
+  String pendantMinutesStored(int minutes) {
+    return '~$minutes min disimpan';
+  }
+
+  @override
+  String get pendantStorageAlmostFull => 'Storan loket hampir penuh — biarkan aplikasi terbuka untuk penyegerakan.';
+
+  @override
+  String get connectRayBanMeta => 'Sambungkan Ray-Ban Meta';
+
+  @override
+  String get raybanMetaSetupDescription =>
+      'Gunakan cermin mata Ray-Ban Meta anda sebagai peranti tangkapan Omi untuk perbualan dan konteks visual. Omi akan membuka aplikasi Meta AI untuk memautkan cermin mata anda.';
+
+  @override
+  String get raybanMetaOpenMetaAI => 'Sambung melalui Meta AI';
+
+  @override
+  String get raybanMetaWaitingForMetaAI => 'Selesaikan penyambungan dalam aplikasi Meta AI, kemudian kembali ke sini.';
+
+  @override
+  String get raybanMetaCheckAgain => 'Semak Semula';
+
+  @override
+  String get raybanMetaAllowCamera => 'Benarkan Kamera pada Cermin Mata';
+
+  @override
+  String get raybanMetaCameraExplanation =>
+      'Omi menggunakan kamera cermin mata anda untuk menambah foto pada perbualan anda. Anda boleh melangkau ini dan menggunakan audio sahaja.';
+
+  @override
+  String get raybanMetaSkipForNow => 'Langkau Buat Masa Ini';
+
+  @override
+  String get raybanMetaAudioOnlyTitle => 'Mod audio sahaja Ray-Ban Meta';
+
+  @override
+  String get raybanMetaAudioOnlyExplanation =>
+      'Versi Omi ini boleh menggunakan mikrofon cermin mata anda melalui Bluetooth. Tangkapan foto memerlukan binaan pembangun Meta bagi Omi.';
+
+  @override
+  String get raybanMetaMusicPauseNote => 'Muzik pada telefon anda dijeda semasa mikrofon cermin mata sedang digunakan.';
+
+  @override
+  String get raybanMetaContinue => 'Teruskan';
+
+  @override
+  String get raybanMetaCapturePhoto => 'Tangkap Foto';
+
+  @override
+  String get raybanMetaPhotoRequested => 'Foto diminta — ia akan muncul dalam perbualan anda.';
+
+  @override
+  String get raybanMetaMicrophoneReady => 'Mikrofon sedia';
+
+  @override
+  String get raybanMetaImageCaptureReady => 'Tangkapan imej sedia';
+
+  @override
+  String get raybanMetaImageCaptureUnavailable => 'Tidak tersedia dalam mod audio sahaja';
+
+  @override
+  String get raybanMetaCamera => 'Kamera';
+
+  @override
+  String errorConnectingRayBanMeta(String error) {
+    return 'Ralat semasa menyambung ke Ray-Ban Meta: $error';
+  }
+
+  @override
+  String get deviceStorageTitle => 'Storan peranti';
+
+  @override
+  String deviceStoragePercentFull(int percent) {
+    return '$percent% penuh';
+  }
+
+  @override
+  String deviceStorageUsedOfTotal(String used, String total) {
+    return '$used daripada $total digunakan';
+  }
+
+  @override
+  String deviceStorageFree(String free) {
+    return '$free bebas';
+  }
+
+  @override
+  String get deviceStorageNearlyFull => 'Peranti hampir penuh — segerakkan untuk mengosongkan ruang.';
+
+  @override
+  String get phoneMicOfflineFallbackMessage =>
+      'Tiada sambungan — merakam secara setempat. Ia akan ditranskripsikan apabila anda dalam talian semula.';
+
+  @override
+  String get dataEncryptedBanner =>
+      'Data anda dilindungi secara lalai dengan penyulitan yang kuat, dan anda mengawal cara ia disimpan dan digunakan.';
+
+  @override
+  String get sttModelAccuracy => 'Ketepatan';
+
+  @override
+  String get whisperModelSizeBase => 'Asas';
+
+  @override
+  String get cloudTranscription => 'Transkripsi awan';
+
+  @override
+  String get sttProviderDeepgram => 'Deepgram';
+
+  @override
+  String get deleteOnDeviceModel => 'Padam Model';
+
+  @override
+  String get deleteOnDeviceModelConfirm => 'Adakah anda pasti mahu memadam model ini?';
+
+  @override
+  String get onDeviceModelDownloaded => 'Dimuat turun';
+
+  @override
+  String get sttModelFaster => 'Lebih pantas';
+
+  @override
+  String get sttFilterAuto => 'Auto';
+
+  @override
+  String get sttModelHigher => 'Lebih tinggi';
+
+  @override
+  String get whisperModelSizeLarge => 'Besar';
+
+  @override
+  String get sttModelLower => 'Lebih rendah';
+
+  @override
+  String get whisperModelSizeMedium => 'Sederhana';
+
+  @override
+  String get onDeviceModelDeleted => 'Model dipadam';
+
+  @override
+  String get onDeviceModelDownloadFailed => 'Muat turun model gagal';
+
+  @override
+  String get onDeviceModelDownloadFailedDesc => 'Gagal memuat turun model Whisper. Sila cuba lagi.';
+
+  @override
+  String get onDeviceModelDownloadSuccess => 'Model dimuat turun';
+
+  @override
+  String get onDeviceModelDownloadSuccessDesc => 'Model Whisper berjaya dimuat turun';
+
+  @override
+  String get onDeviceModelSize => 'Saiz Model';
+
+  @override
+  String get sttNone => 'Tiada';
+
+  @override
+  String get onDeviceTranscription => 'Transkripsi pada peranti';
+
+  @override
+  String get onDeviceTranscriptionDesc => 'Transkripsi diproses secara tempatan pada peranti anda';
+
+  @override
+  String get sttModelSlower => 'Lebih perlahan';
+
+  @override
+  String get whisperModelSizeSmall => 'Kecil';
+
+  @override
+  String get sttProviderSoniox => 'Soniox';
+
+  @override
+  String get speechToTextProvider => 'Penyedia pertuturan-ke-teks';
+
+  @override
+  String get speechToTextProviderDesc => 'Pilih perkhidmatan yang digunakan untuk transkripsi';
+
+  @override
+  String get sttProviderSpeechmatics => 'Speechmatics';
+
+  @override
+  String get sttModelSpeed => 'Kelajuan';
+
+  @override
+  String get whisperModelSizeTiny => 'Sangat kecil';
+
+  @override
+  String get transcriptionLanguage => 'Bahasa transkripsi';
+
+  @override
+  String get transcriptionLanguageDesc => 'Pilih bahasa untuk transkripsi pertuturan';
+
+  @override
+  String get whisperModel => 'Model Whisper';
+
+  @override
+  String get whisperModelDesc => 'Pilih model untuk transkripsi pada peranti';
+
+  @override
+  String get downgradeToFreemiumTitle => 'Turun taraf ke pelan percuma?';
+
+  @override
+  String get downgradeLimitationsHeading => 'Anda akan mengalami had berikut:';
+
+  @override
+  String get downgradeLimitBattery => 'Penggunaan bateri 7x ganda';
+
+  @override
+  String get downgradeLimitQuality => 'Kualiti transkripsi 30% lebih rendah';
+
+  @override
+  String get downgradeLimitDelay => 'Kelewatan 5-7 saat';
+
+  @override
+  String get downgradeLimitSpeakers => 'Tidak dapat mengenal pasti penutur';
+
+  @override
+  String get downgradeAnyway => 'Turun Taraf Juga';
+
+  @override
+  String get googleCalendarNotConnected => 'Kalendar Google Tidak Disambungkan';
+
+  @override
+  String get googleCalendarConnectPrompt =>
+      'Sambungkan Kalendar Google anda untuk memautkan perbualan kepada acara kalendar.';
+
+  @override
+  String linkedToEvent(String title) {
+    return 'Dipautkan kepada “$title”';
+  }
+
+  @override
+  String get failedToLinkCalendarEvent => 'Gagal memautkan acara kalendar';
+
+  @override
+  String get thanksForYourFeedback => 'Terima kasih atas maklum balas anda!';
+
+  @override
+  String get copyMessage => 'Salin mesej';
+
+  @override
+  String get searchSettings => 'Cari tetapan…';
+
+  @override
+  String get errorLoadingAudio => 'Ralat memuatkan audio';
+
+  @override
+  String get rayBanMetaMicPickerTitle => 'Pilih mikrofon Ray-Ban Meta anda';
+
+  @override
+  String get rayBanMetaMicPickerDescription =>
+      'Pilih mikrofon Bluetooth untuk cermin mata anda. Muzik dijeda semasa Omi menggunakannya.';
+
+  @override
+  String get rayBanMetaMicPickerEmpty =>
+      'Tiada mikrofon Bluetooth ditemui. Sambungkan cermin mata dalam Tetapan iPhone, kemudian cuba lagi.';
+
+  @override
+  String get rayBanMetaMicPickerLoadError =>
+      'Mikrofon Bluetooth tidak dapat dimuatkan. Pastikan Bluetooth dihidupkan, kemudian cuba lagi.';
+
+  @override
+  String get rayBanMetaMicPickerConnectError =>
+      'Tidak dapat menyambung ke mikrofon itu. Pastikan ia disambungkan dalam Tetapan iPhone.';
 }

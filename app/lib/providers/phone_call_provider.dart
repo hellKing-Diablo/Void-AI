@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -13,9 +14,12 @@ import 'package:omi/backend/http/shared.dart';
 import 'package:omi/backend/preferences.dart';
 import 'package:omi/backend/schema/phone_call.dart';
 import 'package:omi/backend/schema/transcript_segment.dart';
+import 'package:omi/models/audio_route.dart';
+import 'package:omi/services/auth/auth_token_result.dart';
 import 'package:omi/services/phone_call_service.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/logger.dart';
+
+enum TranscriptionStatus { idle, connecting, active, reconnecting, failed }
 
 class PhoneCallProvider extends ChangeNotifier {
   final PhoneCallService _nativeService = PhoneCallService();
@@ -49,10 +53,28 @@ class PhoneCallProvider extends ChangeNotifier {
   final List<TranscriptSegment> _transcriptSegments = [];
   List<TranscriptSegment> get transcriptSegments => List.unmodifiable(_transcriptSegments);
 
+  // Audio routes
+  List<AudioRoute> _availableRoutes = [];
+  List<AudioRoute> get availableRoutes => List.unmodifiable(_availableRoutes);
+  AudioRoute? _selectedRoute;
+  AudioRoute? get selectedRoute => _selectedRoute;
+
+  // Transcription status
+  TranscriptionStatus _transcriptionStatus = TranscriptionStatus.idle;
+  TranscriptionStatus get transcriptionStatus => _transcriptionStatus;
+
+  // Token refresh
+  Timer? _tokenRefreshTimer;
+
   // WebSocket for transcription
   WebSocketChannel? _transcriptionSocket;
   int _wsReconnectAttempts = 0;
   Timer? _wsReconnectTimer;
+  static const int _maxWsReconnectAttempts = 10;
+
+  // Audio buffer during WS reconnect (~2s at 20ms per frame)
+  final List<Uint8List> _audioBuffer = [];
+  static const int _maxAudioBufferSize = 100;
 
   // Verified phone numbers
   List<VerifiedPhoneNumber> _verifiedNumbers = [];
@@ -68,12 +90,20 @@ class PhoneCallProvider extends ChangeNotifier {
   String? _error;
   String? get error => _error;
 
+  PhoneCallError? _lastError;
+  PhoneCallError? get lastError => _lastError;
+
   Future<void>? _initialLoad;
   Future<void> get initialLoad => _initialLoad ?? Future.value();
+  int _sessionGeneration = 0;
+  bool _sessionEnabled = true;
 
   PhoneCallProvider() {
     _nativeService.onCallStateChanged = _onCallStateChanged;
     _nativeService.onAudioData = _onAudioData;
+    _nativeService.onError = _onNativeError;
+    _nativeService.onMuteConfirmed = _onMuteConfirmed;
+    _nativeService.onSpeakerConfirmed = _onSpeakerConfirmed;
     _nativeService.startListening();
     _initialLoad = loadVerifiedNumbers();
   }
@@ -83,14 +113,21 @@ class PhoneCallProvider extends ChangeNotifier {
   // ************************************************
 
   Future<void> loadVerifiedNumbers() async {
+    _sessionEnabled = true;
+    final generation = _sessionGeneration;
     try {
-      _verifiedNumbers = await api.getVerifiedPhoneNumbers();
+      final numbers = await api.getVerifiedPhoneNumbers();
+      if (generation != _sessionGeneration) return;
+      _verifiedNumbers = numbers;
     } catch (e) {
+      if (generation != _sessionGeneration) return;
       print('PhoneCallProvider: failed to load verified numbers: $e');
       _verifiedNumbers = [];
     } finally {
-      _numbersLoaded = true;
-      notifyListeners();
+      if (generation == _sessionGeneration) {
+        _numbersLoaded = true;
+        notifyListeners();
+      }
     }
   }
 
@@ -101,15 +138,17 @@ class PhoneCallProvider extends ChangeNotifier {
   String? get verificationStatus => _verificationStatus;
 
   Future<bool> startVerification(String phoneNumber) async {
+    final generation = _sessionGeneration;
     _isLoading = true;
     _error = null;
     _validationCode = null;
     _verificationStatus = null;
     notifyListeners();
 
-    MixpanelManager().phoneCallVerificationStarted();
+    PlatformManager.instance.analytics.phoneCallVerificationStarted();
 
     var result = await api.verifyPhoneNumber(phoneNumber);
+    if (generation != _sessionGeneration) return false;
     _isLoading = false;
 
     if (result == null) {
@@ -131,19 +170,23 @@ class PhoneCallProvider extends ChangeNotifier {
   }
 
   Future<bool> checkVerification(String phoneNumber) async {
+    final generation = _sessionGeneration;
     var result = await api.checkPhoneVerification(phoneNumber);
+    if (generation != _sessionGeneration) return false;
     if (result == null) return false;
 
     bool verified = result['verified'] == true;
     if (verified) {
-      MixpanelManager().phoneCallVerificationCompleted();
+      PlatformManager.instance.analytics.phoneCallVerificationCompleted();
       await loadVerifiedNumbers();
     }
     return verified;
   }
 
   Future<bool> deleteNumber(String phoneNumberId) async {
+    final generation = _sessionGeneration;
     var success = await api.deleteVerifiedPhoneNumber(phoneNumberId);
+    if (generation != _sessionGeneration) return false;
     if (success) {
       _verifiedNumbers.removeWhere((n) => n.id == phoneNumberId);
       notifyListeners();
@@ -156,6 +199,8 @@ class PhoneCallProvider extends ChangeNotifier {
   // ************************************************
 
   Future<bool> startCall(String phoneNumber) async {
+    _sessionEnabled = true;
+    final generation = _sessionGeneration;
     if (_callState != PhoneCallState.idle) {
       _error = 'A call is already in progress';
       notifyListeners();
@@ -163,9 +208,11 @@ class PhoneCallProvider extends ChangeNotifier {
     }
 
     _error = null;
+    _lastError = null;
     _callState = PhoneCallState.connecting;
     _remoteNumber = phoneNumber;
-    _currentCallId = DateTime.now().millisecondsSinceEpoch.toString();
+    final callId = DateTime.now().millisecondsSinceEpoch.toString();
+    _currentCallId = callId;
     _transcriptSegments.clear();
     _isMuted = false;
     _isSpeakerOn = false;
@@ -173,6 +220,7 @@ class PhoneCallProvider extends ChangeNotifier {
 
     // Request mic permission first, before any SDK initialization
     var micStatus = await Permission.microphone.request();
+    if (generation != _sessionGeneration) return false;
     if (!micStatus.isGranted) {
       _callState = PhoneCallState.idle;
       _error = 'Microphone permission is required to make calls';
@@ -182,9 +230,11 @@ class PhoneCallProvider extends ChangeNotifier {
 
     // Resolve contact name from device contacts
     _contactName = await _resolveContactName(phoneNumber);
+    if (generation != _sessionGeneration) return false;
 
     // Get Twilio token
     var token = await api.getPhoneCallToken();
+    if (generation != _sessionGeneration) return false;
     if (token == null) {
       _callState = PhoneCallState.idle;
       _error = 'Failed to get call token. Verify your phone number first.';
@@ -194,6 +244,7 @@ class PhoneCallProvider extends ChangeNotifier {
 
     // Initialize native Twilio SDK
     var initialized = await _nativeService.initialize(token.accessToken);
+    if (generation != _sessionGeneration) return false;
     if (!initialized) {
       _callState = PhoneCallState.idle;
       _error = 'Failed to initialize call service';
@@ -201,23 +252,31 @@ class PhoneCallProvider extends ChangeNotifier {
       return false;
     }
 
+    // Schedule token refresh before expiry (3-minute buffer)
+
+    _scheduleTokenRefresh(token.ttl);
+
     // Make the call via native layer
     var callStarted = await _nativeService.makeCall(
       phoneNumber: phoneNumber,
-      callId: _currentCallId!,
+      callId: callId,
       contactName: _contactName,
     );
+    if (generation != _sessionGeneration) {
+      if (callStarted) unawaited(_nativeService.endCall());
+      return false;
+    }
 
     if (!callStarted) {
       _callState = PhoneCallState.idle;
       _error = 'Failed to start call';
-      MixpanelManager().phoneCallFailed(error: 'Failed to start call');
+      PlatformManager.instance.analytics.phoneCallFailed(error: 'Failed to start call');
       _disconnectTranscriptionSocket();
       notifyListeners();
       return false;
     }
 
-    MixpanelManager().phoneCallStarted(contactName: _contactName);
+    PlatformManager.instance.analytics.phoneCallStarted(contactName: _contactName);
     return true;
   }
 
@@ -227,15 +286,32 @@ class PhoneCallProvider extends ChangeNotifier {
   }
 
   void toggleMute() {
-    _isMuted = !_isMuted;
-    _nativeService.toggleMute(_isMuted);
-    notifyListeners();
+    // Don't update state here — wait for native confirmation via _onMuteConfirmed
+    _nativeService.toggleMute(!_isMuted);
   }
 
   void toggleSpeaker() {
-    _isSpeakerOn = !_isSpeakerOn;
-    _nativeService.toggleSpeaker(_isSpeakerOn);
+    // Don't update state here — wait for native confirmation via _onSpeakerConfirmed
+    _nativeService.toggleSpeaker(!_isSpeakerOn);
+  }
+
+  Future<void> loadAudioRoutes() async {
+    final generation = _sessionGeneration;
+    final routes = await _nativeService.getAudioRoutes();
+    if (generation != _sessionGeneration) return;
+    _availableRoutes = routes;
     notifyListeners();
+  }
+
+  Future<void> selectAudioRoute(AudioRoute route) async {
+    final generation = _sessionGeneration;
+    var success = await _nativeService.selectAudioRoute(route.id);
+    if (generation != _sessionGeneration) return;
+    if (success) {
+      _selectedRoute = route;
+      _isSpeakerOn = route.type == AudioRouteType.speaker;
+      notifyListeners();
+    }
   }
 
   void sendDtmf(String digit) {
@@ -258,12 +334,13 @@ class PhoneCallProvider extends ChangeNotifier {
   // ************************************************
 
   void _onCallStateChanged(PhoneCallState state) {
+    if (!_sessionEnabled) return;
     _callState = state;
     if (state == PhoneCallState.active && _callStartTime == null) {
       _callStartTime = DateTime.now();
       _startDurationTimer();
       _connectTranscriptionSocket();
-      MixpanelManager().phoneCallConnected();
+      PlatformManager.instance.analytics.phoneCallConnected();
     } else if (state == PhoneCallState.ended || state == PhoneCallState.failed) {
       _onCallEnded();
     }
@@ -271,10 +348,29 @@ class PhoneCallProvider extends ChangeNotifier {
   }
 
   void _onAudioData(Uint8List audioData, int channel) {
-    // Forward audio data to WebSocket with channel prefix
+    if (!_sessionEnabled) return;
     var socket = _transcriptionSocket;
-    if (socket == null) return;
+
+    // Buffer audio during WebSocket reconnect
+    if (socket == null) {
+      if (_audioBuffer.length < _maxAudioBufferSize) {
+        var data = Uint8List(1 + audioData.length);
+        data[0] = channel;
+        data.setRange(1, data.length, audioData);
+        _audioBuffer.add(data);
+      }
+      return;
+    }
+
     try {
+      // Flush buffered audio first
+      if (_audioBuffer.isNotEmpty) {
+        for (var buffered in _audioBuffer) {
+          socket.sink.add(buffered);
+        }
+        _audioBuffer.clear();
+      }
+
       var data = Uint8List(1 + audioData.length);
       data[0] = channel; // 0x01 = user, 0x02 = remote
       data.setRange(1, data.length, audioData);
@@ -285,10 +381,14 @@ class PhoneCallProvider extends ChangeNotifier {
   }
 
   void _onCallEnded() {
-    MixpanelManager().phoneCallEnded(durationSeconds: _callDuration.inSeconds);
+    PlatformManager.instance.analytics.phoneCallEnded(durationSeconds: _callDuration.inSeconds);
     _callState = PhoneCallState.ended;
     _stopDurationTimer();
     _disconnectTranscriptionSocket();
+    _tokenRefreshTimer?.cancel();
+    _tokenRefreshTimer = null;
+    _transcriptionStatus = TranscriptionStatus.idle;
+    _audioBuffer.clear();
     notifyListeners();
 
     // Reset state after a short delay so UI can show "Call Ended"
@@ -300,7 +400,51 @@ class PhoneCallProvider extends ChangeNotifier {
       _callStartTime = null;
       _callDuration = Duration.zero;
       _transcriptSegments.clear();
+      _availableRoutes = [];
+      _selectedRoute = null;
       notifyListeners();
+    });
+  }
+
+  void _onNativeError(PhoneCallError error) {
+    _lastError = error;
+    _error = error.message;
+    Logger.error('PhoneCallProvider: native error: ${error.code} - ${error.message}');
+    notifyListeners();
+  }
+
+  void _onMuteConfirmed(bool muted) {
+    _isMuted = muted;
+    notifyListeners();
+  }
+
+  void _onSpeakerConfirmed(bool speakerOn) {
+    _isSpeakerOn = speakerOn;
+    notifyListeners();
+  }
+
+  void _scheduleTokenRefresh(int ttlSeconds) {
+    _tokenRefreshTimer?.cancel();
+    final generation = _sessionGeneration;
+    // Refresh 3 minutes before expiry (or half TTL if TTL < 6 min)
+    var refreshInSeconds = ttlSeconds > 360 ? ttlSeconds - 180 : ttlSeconds ~/ 2;
+    if (refreshInSeconds <= 0) return;
+
+    Logger.info('PhoneCallProvider: scheduling token refresh in ${refreshInSeconds}s');
+    _tokenRefreshTimer = Timer(Duration(seconds: refreshInSeconds), () async {
+      if (generation != _sessionGeneration || !_sessionEnabled) return;
+      if (_callState != PhoneCallState.active && _callState != PhoneCallState.ringing) return;
+      Logger.info('PhoneCallProvider: refreshing call token');
+      var token = await api.getPhoneCallToken();
+      if (generation != _sessionGeneration || !_sessionEnabled) return;
+      if (token != null) {
+        await _nativeService.initialize(token.accessToken);
+        if (generation != _sessionGeneration || !_sessionEnabled) return;
+        _scheduleTokenRefresh(token.ttl);
+      } else {
+        Logger.error('PhoneCallProvider: token refresh failed, retrying in 30s');
+        _scheduleTokenRefresh(60);
+      }
     });
   }
 
@@ -324,14 +468,16 @@ class PhoneCallProvider extends ChangeNotifier {
   // ************************************************
 
   Future<void> _connectTranscriptionSocket() async {
-    if (_currentCallId == null) return;
+    if (_currentCallId == null || !_sessionEnabled) return;
+    final generation = _sessionGeneration;
 
     _wsReconnectTimer?.cancel();
     _wsReconnectTimer = null;
+    _transcriptionStatus = TranscriptionStatus.connecting;
+    notifyListeners();
 
-    var language = SharedPreferencesUtil().hasSetPrimaryLanguage
-        ? SharedPreferencesUtil().userPrimaryLanguage
-        : 'multi';
+    var language =
+        SharedPreferencesUtil().hasSetPrimaryLanguage ? SharedPreferencesUtil().userPrimaryLanguage : 'multi';
 
     var wsUrl = api.buildPhoneCallWebSocketUrl(
       callId: _currentCallId!,
@@ -342,6 +488,7 @@ class PhoneCallProvider extends ChangeNotifier {
 
     try {
       var headers = await buildHeaders(requireAuthCheck: true);
+      if (generation != _sessionGeneration || !_sessionEnabled) return;
       _transcriptionSocket = IOWebSocketChannel.connect(
         wsUrl,
         headers: headers,
@@ -349,22 +496,38 @@ class PhoneCallProvider extends ChangeNotifier {
       );
       _transcriptionSocket!.stream.listen(
         (message) {
+          if (generation != _sessionGeneration || !_sessionEnabled) return;
+          if (_transcriptionStatus != TranscriptionStatus.active) {
+            _transcriptionStatus = TranscriptionStatus.active;
+            notifyListeners();
+          }
           if (message is String) {
             _handleTranscriptionMessage(message);
           }
         },
         onError: (error) {
+          if (generation != _sessionGeneration || !_sessionEnabled) return;
           Logger.error('PhoneCallProvider: WebSocket error: $error');
           _transcriptionSocket = null;
           _scheduleReconnect();
         },
         onDone: () {
+          if (generation != _sessionGeneration || !_sessionEnabled) return;
           Logger.info('PhoneCallProvider: WebSocket closed');
           _transcriptionSocket = null;
           _scheduleReconnect();
         },
       );
       _wsReconnectAttempts = 0;
+    } on AuthTokenUnavailableException catch (e) {
+      Logger.debug('PhoneCallProvider: authenticated WebSocket blocked before connect: ${e.result.runtimeType}');
+      _transcriptionSocket = null;
+      if (e.result is AuthTokenTransientFailure) {
+        _scheduleReconnect();
+      } else {
+        _transcriptionStatus = TranscriptionStatus.failed;
+        notifyListeners();
+      }
     } catch (e) {
       Logger.error('PhoneCallProvider: failed to connect WebSocket: $e');
       _transcriptionSocket = null;
@@ -373,13 +536,18 @@ class PhoneCallProvider extends ChangeNotifier {
   }
 
   void _scheduleReconnect() {
-    if (_callState != PhoneCallState.active) return;
-    if (_wsReconnectAttempts >= 5) {
+    if (_callState != PhoneCallState.active || !_sessionEnabled) return;
+    if (_wsReconnectAttempts >= _maxWsReconnectAttempts) {
       Logger.error('PhoneCallProvider: max reconnect attempts reached, giving up');
+      _transcriptionStatus = TranscriptionStatus.failed;
+      notifyListeners();
       return;
     }
 
-    var delay = Duration(seconds: 1 << _wsReconnectAttempts); // 1s, 2s, 4s, 8s, 16s
+    _transcriptionStatus = TranscriptionStatus.reconnecting;
+    notifyListeners();
+
+    var delay = Duration(seconds: 1 << _wsReconnectAttempts); // 1s, 2s, 4s, 8s...
     _wsReconnectAttempts++;
     Logger.info('PhoneCallProvider: reconnecting WebSocket in ${delay.inSeconds}s (attempt $_wsReconnectAttempts)');
 
@@ -470,7 +638,37 @@ class PhoneCallProvider extends ChangeNotifier {
   void dispose() {
     _stopDurationTimer();
     _disconnectTranscriptionSocket();
+    _tokenRefreshTimer?.cancel();
     _nativeService.dispose();
     super.dispose();
+  }
+
+  void clearUserData() {
+    _sessionGeneration++;
+    _sessionEnabled = false;
+    if (_callState != PhoneCallState.idle) unawaited(_nativeService.endCall());
+    _stopDurationTimer();
+    _disconnectTranscriptionSocket();
+    _tokenRefreshTimer?.cancel();
+    _tokenRefreshTimer = null;
+    _callState = PhoneCallState.idle;
+    _currentCallId = null;
+    _remoteNumber = null;
+    _contactName = null;
+    _callStartTime = null;
+    _callDuration = Duration.zero;
+    _transcriptSegments.clear();
+    _availableRoutes = [];
+    _selectedRoute = null;
+    _audioBuffer.clear();
+    _verifiedNumbers = [];
+    _numbersLoaded = false;
+    _validationCode = null;
+    _verificationStatus = null;
+    _transcriptionStatus = TranscriptionStatus.idle;
+    _isLoading = false;
+    _error = null;
+    _lastError = null;
+    notifyListeners();
   }
 }

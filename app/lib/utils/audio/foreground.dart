@@ -1,12 +1,10 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'package:omi/utils/logger.dart';
+import 'package:omi/utils/notification_channel_strings.dart';
 
 @pragma('vm:entry-point')
 void _startForegroundCallback() {
@@ -24,7 +22,8 @@ class _ForegroundFirstTaskHandler extends TaskHandler {
 
   Future _locationInBackground() async {
     if (await Geolocator.isLocationServiceEnabled()) {
-      if (await Geolocator.checkPermission() == LocationPermission.always) {
+      final permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.always || permission == LocationPermission.whileInUse) {
         var locationData = await Geolocator.getCurrentPosition();
         if (_locationUpdatedAt == null ||
             _locationUpdatedAt!.isBefore(DateTime.now().subtract(const Duration(minutes: 5)))) {
@@ -39,7 +38,7 @@ class _ForegroundFirstTaskHandler extends TaskHandler {
           _locationUpdatedAt = DateTime.now();
         }
       } else {
-        Object loc = {'error': 'Always location permission is not granted'};
+        Object loc = {'error': 'Location permission is not granted'};
         FlutterForegroundTask.sendDataToMain(loc);
       }
     } else {
@@ -107,11 +106,12 @@ class ForegroundUtil {
     Logger.debug('initializeForegroundService');
 
     try {
+      await NotificationChannelStrings.loadAppLocale();
       FlutterForegroundTask.init(
         androidNotificationOptions: AndroidNotificationOptions(
           channelId: 'foreground_service',
-          channelName: 'Foreground Service Notification',
-          channelDescription: 'Transcription service is running in the background.',
+          channelName: NotificationChannelStrings.foregroundServiceChannelName,
+          channelDescription: NotificationChannelStrings.foregroundServiceChannelDescription,
           channelImportance: NotificationChannelImportance.LOW,
           priority: NotificationPriority.HIGH,
           // iconData: const NotificationIconData(

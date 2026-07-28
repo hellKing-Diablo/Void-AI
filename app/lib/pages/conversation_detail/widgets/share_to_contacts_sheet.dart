@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -11,8 +12,6 @@ import 'package:provider/provider.dart';
 import 'package:omi/backend/http/api/conversations.dart';
 import 'package:omi/backend/schema/conversation.dart';
 import 'package:omi/pages/conversation_detail/conversation_detail_provider.dart';
-import 'package:omi/widgets/extensions/string.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 
 /// Contact with phone number for sharing
@@ -58,7 +57,7 @@ class _ShareToContactsBottomSheetState extends State<ShareToContactsBottomSheet>
   void initState() {
     super.initState();
     // Track sheet opened
-    MixpanelManager().shareToContactsSheetOpened(widget.conversation.id);
+    PlatformManager.instance.analytics.shareToContactsSheetOpened(widget.conversation.id);
     _loadContacts();
   }
 
@@ -153,7 +152,7 @@ class _ShareToContactsBottomSheetState extends State<ShareToContactsBottomSheet>
     // Track selection changes
     final selectedCount = _selectedContacts.length;
     if (selectedCount > 0) {
-      MixpanelManager().shareToContactsSelected(widget.conversation.id, selectedCount);
+      PlatformManager.instance.analytics.shareToContactsSelected(widget.conversation.id, selectedCount);
     }
   }
 
@@ -163,6 +162,7 @@ class _ShareToContactsBottomSheetState extends State<ShareToContactsBottomSheet>
     final selected = _selectedContacts;
     if (selected.isEmpty) return;
 
+    final l10n = context.l10n;
     setState(() {
       _isPreparingShare = true;
       _errorMessage = null;
@@ -175,7 +175,7 @@ class _ShareToContactsBottomSheetState extends State<ShareToContactsBottomSheet>
         if (!mounted) return;
         setState(() {
           _isPreparingShare = false;
-          _errorMessage = context.l10n.failedToPrepareConversationForSharing;
+          _errorMessage = l10n.failedToPrepareConversationForSharing;
         });
         return;
       }
@@ -185,7 +185,7 @@ class _ShareToContactsBottomSheetState extends State<ShareToContactsBottomSheet>
 
       // Build the share link and message
       final shareLink = 'https://h.omi.me/conversations/${widget.conversation.id}';
-      final message = context.l10n.heresWhatWeDiscussed(shareLink);
+      final message = l10n.heresWhatWeDiscussed(shareLink);
 
       // Build recipients string (comma-separated phone numbers)
       final recipients = selected.map((c) => c.phoneNumber).join(',');
@@ -204,14 +204,16 @@ class _ShareToContactsBottomSheetState extends State<ShareToContactsBottomSheet>
       // Launch native SMS app
       if (await canLaunchUrl(smsUri)) {
         // Track SMS opened
-        MixpanelManager().shareToContactsSmsOpened(widget.conversation.id, selected.length);
+        PlatformManager.instance.analytics.shareToContactsSmsOpened(widget.conversation.id, selected.length);
         HapticFeedback.mediumImpact();
-        Navigator.of(context).pop();
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
         await launchUrl(smsUri);
       } else {
         setState(() {
           _isPreparingShare = false;
-          _errorMessage = context.l10n.couldNotOpenSmsApp;
+          _errorMessage = l10n.couldNotOpenSmsApp;
         });
       }
     } catch (e) {
@@ -299,7 +301,7 @@ class _ShareToContactsBottomSheetState extends State<ShareToContactsBottomSheet>
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
-                          color: Colors.deepPurple.withOpacity(0.3),
+                          color: Colors.deepPurple.withValues(alpha: 0.3),
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
@@ -328,7 +330,7 @@ class _ShareToContactsBottomSheetState extends State<ShareToContactsBottomSheet>
                   child: Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(0.2),
+                      color: Colors.red.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
@@ -372,8 +374,8 @@ class _ShareToContactsBottomSheetState extends State<ShareToContactsBottomSheet>
                                 _selectedContacts.isEmpty
                                     ? context.l10n.selectContactsToShare
                                     : _selectedContacts.length > 1
-                                    ? context.l10n.shareWithContactsCount(_selectedContacts.length)
-                                    : context.l10n.shareWithContactCount(_selectedContacts.length),
+                                        ? context.l10n.shareWithContactsCount(_selectedContacts.length)
+                                        : context.l10n.shareWithContactCount(_selectedContacts.length),
                                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white),
                               ),
                       ),

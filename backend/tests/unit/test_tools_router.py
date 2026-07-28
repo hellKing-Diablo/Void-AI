@@ -19,8 +19,13 @@ import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from tests.unit.memory_import_isolation import restore_sys_modules, snapshot_sys_modules
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -46,6 +51,11 @@ def _stub_package(name):
     mod = types.ModuleType(name)
     mod.__path__ = []
     sys.modules[name] = mod
+    if "." in name:
+        parent_name, attr_name = name.rsplit(".", 1)
+        parent = sys.modules.get(parent_name)
+        if parent is not None:
+            setattr(parent, attr_name, mod)
     return mod
 
 
@@ -61,7 +71,69 @@ def _load_module_from_file(module_name, file_path):
 
 # ---------------------------------------------------------------------------
 # Stub heavy dependencies before importing anything from backend
+#
+# Snapshot touched modules first so the stubs installed below do not leak into
+# other test files during bulk ``pytest tests/unit/`` collection (issue #8661).
+# They are restored right after the modules under test are imported.
 # ---------------------------------------------------------------------------
+_SYS_MODULE_NAMES = [
+    "firebase_admin",
+    "firebase_admin.firestore",
+    "firebase_admin.auth",
+    "firebase_admin.messaging",
+    "firebase_admin.credentials",
+    "google.cloud.firestore",
+    "google.cloud.firestore_v1",
+    "google.cloud.firestore_v1.base_query",
+    "google.auth",
+    "google.auth.transport",
+    "google.auth.transport.requests",
+    "google.cloud.storage",
+    "opuslib",
+    "sentry_sdk",
+    "database",
+    "database._client",
+    "database.redis_db",
+    "database.auth",
+    "database.conversations",
+    "database.users",
+    "database.memories",
+    "database.vector_db",
+    "database.action_items",
+    "database.notifications",
+    "utils",
+    "utils.notifications",
+    "utils.conversations",
+    "utils.conversations.render",
+    "utils.conversations.factory",
+    "utils.conversations.search",
+    "utils.conversations.transcript_chunks",
+    "utils.retrieval",
+    "utils.retrieval.tools",
+    "utils.retrieval.tools.calendar_tools",
+    "utils.retrieval.tool_services",
+    "utils.retrieval.tool_services.conversations",
+    "utils.retrieval.tool_services.memories",
+    "utils.retrieval.tool_services.action_items",
+    "utils.retrieval.tool_result_boundaries",
+    "utils.other",
+    "utils.other.endpoints",
+    "utils.memory",
+    "utils.memory.chat_memory_adapter",
+    "utils.memory.default_read_rollout",
+    "utils.memory.memory_system",
+    "utils.memory.memory_service",
+    "utils.memory.surface_routing",
+    "utils.rate_limit_config",
+    "routers",
+    "routers.tools",
+    "models",
+    "models.conversation",
+    "models.other",
+    "models.memories",
+]
+_SYS_MODULES_SNAPSHOT = snapshot_sys_modules(_SYS_MODULE_NAMES)
+
 for mod_name in [
     "firebase_admin",
     "firebase_admin.firestore",
@@ -86,6 +158,7 @@ for mod_name in [
 
 # Stub database packages
 _stub_package("database")
+sys.modules["database._client"].db = MagicMock()
 
 # Stub database.conversations
 conversations_db = _stub_module("database.conversations")
@@ -113,17 +186,132 @@ action_items_db.get_action_item = MagicMock(return_value=None)
 action_items_db.create_action_item = MagicMock(return_value="test-item-id")
 action_items_db.update_action_item = MagicMock(return_value=True)
 
+# Stub database.notifications
+notifications_db = _stub_module("database.notifications")
+notifications_db.get_user_time_zone = MagicMock(return_value="UTC")
+
 # Stub notifications
 notif_mod = _stub_module("utils.notifications")
 notif_mod.send_action_item_completed_notification = MagicMock()
 notif_mod.send_action_item_created_notification = MagicMock()
 notif_mod.send_action_item_data_message = MagicMock()
+notif_mod.sync_action_item_reminder = MagicMock()
 
 # Stub utils packages
 _stub_package("utils")
+_stub_package("utils.conversations")
 _stub_package("utils.retrieval")
+_stub_package("utils.retrieval.tools")
 _stub_package("utils.retrieval.tool_services")
 _stub_package("utils.other")
+_stub_package("utils.memory")
+
+memory_adapter_stub = _stub_module("utils.memory.chat_memory_adapter")
+memory_adapter_stub.list_default_chat_memories_decision_text = MagicMock(
+    return_value=types.SimpleNamespace(read_decision="use_legacy_safe", text="", fallback_reason="test")
+)
+memory_adapter_stub.search_memory_default_chat_memories_vector_decision_text = MagicMock(
+    return_value=types.SimpleNamespace(read_decision="use_legacy_safe", text="", fallback_reason="test")
+)
+read_rollout_stub = _stub_module("utils.memory.default_read_rollout")
+read_rollout_stub.MemoryReadDecision = types.SimpleNamespace(
+    USE_MEMORY="use_memory",
+    USE_LEGACY_SAFE="use_legacy_safe",
+)
+
+memory_system_stub = _stub_module("utils.memory.memory_system")
+memory_system_stub.MemorySystem = types.SimpleNamespace(LEGACY="legacy", CANONICAL="canonical")
+
+memory_service_stub = _stub_module("utils.memory.memory_service")
+memory_service_stub.MemoryService = MagicMock
+
+surface_routing_stub = _stub_module("utils.memory.surface_routing")
+surface_routing_stub.pin_memory_system = MagicMock(return_value=memory_system_stub.MemorySystem.LEGACY)
+boundary_stub = _stub_module("utils.retrieval.tool_result_boundaries")
+boundary_stub.preserve_chat_memory_tool_result_boundary = MagicMock(side_effect=lambda _tool_name, result: result)
+
+
+class FakeCalendarEventTool:
+    def __init__(self):
+        self.calls = []
+        self.next_result = None
+
+    async def ainvoke(self, tool_input, config=None):
+        self.calls.append((tool_input, config))
+        if self.next_result is not None:
+            result = self.next_result
+            self.next_result = None
+            return result
+        return f"✅ Successfully created calendar event: {tool_input['title']}"
+
+
+calendar_tools_mod = _stub_module("utils.retrieval.tools.calendar_tools")
+calendar_tools_mod.create_calendar_event_tool = FakeCalendarEventTool()
+
+# Stub render and factory modules
+render_mod = _stub_module("utils.conversations.render")
+
+
+def _stub_resolve_display_tz(tz):
+    if tz:
+        try:
+            return ZoneInfo(tz), tz
+        except Exception:
+            pass
+    return timezone.utc, "UTC"
+
+
+def _stub_format_local_time(dt, display_tz, tz_label):
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return f"{dt.astimezone(display_tz).strftime('%Y-%m-%d %H:%M:%S')} {tz_label}"
+
+
+def _stub_format_local_date(dt, display_tz):
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(display_tz).strftime('%Y-%m-%d')
+
+
+render_mod.resolve_display_tz = _stub_resolve_display_tz
+render_mod.format_local_time = _stub_format_local_time
+render_mod.format_local_date = _stub_format_local_date
+render_mod.conversations_to_string = MagicMock(
+    side_effect=lambda convs, **kw: f"[{len(convs)} conversations formatted]"
+)
+factory_mod = _stub_module("utils.conversations.factory")
+factory_mod.deserialize_conversation = MagicMock(
+    side_effect=lambda d: d if not isinstance(d, dict) else type('FakeConv', (), d)()
+)
+search_mod = _stub_module("utils.conversations.search")
+search_mod.keyword_search_conversation_ids = MagicMock(return_value=[])
+
+
+def _merge_conversation_search_ids(keyword_ids, vector_ids):
+    return list(keyword_ids) + [cid for cid in vector_ids if cid not in keyword_ids]
+
+
+search_mod.merge_conversation_search_ids = MagicMock(side_effect=_merge_conversation_search_ids)
+transcript_chunks_mod = _stub_module("utils.conversations.transcript_chunks")
+
+
+def _hydrate_chunk_texts(_uid, conversations):
+    return conversations
+
+
+transcript_chunks_mod.hydrate_chunk_texts = MagicMock(side_effect=_hydrate_chunk_texts)
+
+
+@pytest.fixture(autouse=True)
+def reset_conversation_search_stubs():
+    search_mod.keyword_search_conversation_ids.reset_mock()
+    search_mod.keyword_search_conversation_ids.return_value = []
+    search_mod.merge_conversation_search_ids.reset_mock()
+    search_mod.merge_conversation_search_ids.side_effect = _merge_conversation_search_ids
+    transcript_chunks_mod.hydrate_chunk_texts.reset_mock()
+    transcript_chunks_mod.hydrate_chunk_texts.side_effect = _hydrate_chunk_texts
+
+
 endpoints_mod = _stub_module("utils.other.endpoints")
 endpoints_mod.get_current_user_uid = MagicMock()
 endpoints_mod.with_rate_limit = MagicMock(return_value=MagicMock())
@@ -207,6 +395,19 @@ action_items_svc = _load_module_from_file(
     "utils.retrieval.tool_services.action_items",
     BACKEND_DIR / "utils" / "retrieval" / "tool_services" / "action_items.py",
 )
+router_mod = _load_module_from_file(
+    "routers.tools",
+    BACKEND_DIR / "routers" / "tools.py",
+)
+rate_limit_config_mod = _load_module_from_file(
+    "utils.rate_limit_config",
+    BACKEND_DIR / "utils" / "rate_limit_config.py",
+)
+
+# Restore sys.modules now that the modules under test are imported and bound to
+# their stubbed dependencies. Tests below patch those module objects directly.
+restore_sys_modules(_SYS_MODULES_SNAPSHOT)
+del _SYS_MODULES_SNAPSHOT, _SYS_MODULE_NAMES
 
 
 # ===========================================================================
@@ -231,6 +432,68 @@ class TestParseIsoDate:
     def test_invalid_format_raises(self):
         with pytest.raises(ValueError):
             conversations_svc.parse_iso_date("not-a-date", "test")
+
+    def test_space_to_plus_recovery_positive_offset(self):
+        """URL decoding converts + to space; parse_iso_date should recover it."""
+        dt = conversations_svc.parse_iso_date("2026-02-01T00:00:00 07:00", "test")
+        assert dt.year == 2026
+        assert dt.utcoffset().total_seconds() == 7 * 3600
+
+    def test_space_to_plus_recovery_utc(self):
+        """Space before 00:00 at end should be recovered to +00:00."""
+        dt = conversations_svc.parse_iso_date("2026-02-01T00:00:00 00:00", "test")
+        assert dt.utcoffset().total_seconds() == 0
+
+    def test_negative_offset_unchanged(self):
+        """Negative offsets (-07:00) should not be affected by recovery."""
+        dt = conversations_svc.parse_iso_date("2026-02-01T00:00:00-07:00", "test")
+        assert dt.utcoffset().total_seconds() == -7 * 3600
+
+    def test_valid_plus_still_works(self):
+        """Normal +07:00 (not URL-corrupted) should still parse fine."""
+        dt = conversations_svc.parse_iso_date("2026-02-01T00:00:00+07:00", "test")
+        assert dt.utcoffset().total_seconds() == 7 * 3600
+
+    def test_z_suffix_still_works(self):
+        """Z suffix should still parse as UTC."""
+        dt = conversations_svc.parse_iso_date("2026-02-01T00:00:00Z", "test")
+        assert dt.utcoffset().total_seconds() == 0
+
+    def test_malformed_still_raises(self):
+        """Truly malformed dates should still raise ValueError."""
+        with pytest.raises(ValueError):
+            conversations_svc.parse_iso_date("2026-13-01T00:00:00+07:00", "test")
+
+    def test_double_space_date_time_and_tz(self):
+        """Date with space separator AND URL-corrupted tz: '2026-02-01 00:00:00 07:00'.
+        Regex only replaces trailing ' HH:MM', so result is '2026-02-01 00:00:00+07:00'
+        which is valid ISO (space between date and time is allowed)."""
+        dt = conversations_svc.parse_iso_date("2026-02-01 00:00:00 07:00", "test")
+        assert dt.year == 2026
+        assert dt.utcoffset().total_seconds() == 7 * 3600
+
+    def test_space_before_plus_accepted_by_python(self):
+        """'2026-02-01T00:00:00 +07:00' — Python 3.11+ fromisoformat accepts space before offset.
+        Regex does NOT match (ends with +07:00 not ' HH:MM'), but fromisoformat handles it natively."""
+        dt = conversations_svc.parse_iso_date("2026-02-01T00:00:00 +07:00", "test")
+        assert dt.utcoffset().total_seconds() == 7 * 3600
+
+    def test_trailing_whitespace_not_recovered(self):
+        """Trailing whitespace after offset should not be recovered."""
+        with pytest.raises(ValueError):
+            conversations_svc.parse_iso_date("2026-02-01T00:00:00 07:00 ", "test")
+
+    def test_source_has_encode_query_date(self):
+        """Verify desktop tool routes preserve plus-sign timezone offsets."""
+        source_root = BACKEND_DIR.parent / "desktop" / "macos" / "Desktop" / "Sources"
+        paths = sorted(source_root.rglob("APIClient*.swift"))
+        if not paths:
+            pytest.skip("APIClient sources not found (backend-only test environment)")
+        source = "\n".join(path.read_text(encoding="utf-8") for path in paths)
+        assert 'func encodeQueryDate' in source, "encodeQueryDate helper must exist in the APIClient extension set"
+        # 8 call sites + 1 definition = at least 9 occurrences
+        count = source.count('encodeQueryDate(')
+        assert count >= 9, f"Expected >= 9 encodeQueryDate( occurrences (1 def + 8 calls), got {count}"
 
 
 # ===========================================================================
@@ -269,6 +532,43 @@ class TestGetConversationsText:
         ]
         result = conversations_svc.get_conversations_text(uid="test-uid")
         assert "1 conversations formatted" in result
+
+
+class TestGetConversationsTextMalformedPerson:
+    def setup_method(self):
+        conversations_db.get_conversations.reset_mock()
+        conversations_db.get_conversations.return_value = []
+        users_db.get_people_by_ids.reset_mock()
+        users_db.get_people_by_ids.return_value = []
+        render_mod.conversations_to_string.reset_mock()
+
+    def test_malformed_person_is_skipped_not_500(self):
+        """A legacy person doc missing the required name must be skipped, not 500 the whole list.
+
+        Before the fix, Person(**p) raised out of the unguarded people list-comp and, via the
+        unguarded GET /v1/tools/conversations handler, surfaced as HTTP 500 for the entire response.
+        Now the bad person is skipped (and logged) and the conversations still return with the good
+        speaker resolved.
+        """
+        conversations_db.get_conversations.return_value = [
+            {'id': 'conv-1', 'transcript_segments': [{'person_id': 'p-good'}, {'person_id': 'p-bad'}], 'title': 'T'},
+        ]
+        users_db.get_people_by_ids.return_value = [
+            {'id': 'p-good', 'name': 'Alice'},
+            {'id': 'p-bad'},  # legacy doc missing the required 'name'
+        ]
+
+        def fake_person(**kwargs):
+            if 'name' not in kwargs:
+                raise ValueError("Person requires name")  # stand-in for pydantic ValidationError
+            return types.SimpleNamespace(**kwargs)
+
+        with patch.object(conversations_svc, 'Person', side_effect=fake_person):
+            result = conversations_svc.get_conversations_text(uid="test-uid")
+
+        assert "1 conversations formatted" in result  # completed without raising -> no 500
+        people_arg = render_mod.conversations_to_string.call_args.kwargs['people']
+        assert [pp.name for pp in people_arg] == ['Alice']  # malformed person skipped, good one kept
 
 
 # ===========================================================================
@@ -458,6 +758,7 @@ class TestUpdateActionItemText:
         action_items_db.get_action_item.reset_mock()
         action_items_db.update_action_item.reset_mock()
         action_items_db.update_action_item.return_value = True
+        calendar_tools_mod.create_calendar_event_tool.calls.clear()
         notif_mod.send_action_item_completed_notification.reset_mock()
 
     def test_empty_id_rejected(self):
@@ -497,18 +798,12 @@ class TestRouterEnvelope:
     """Test the _ok helper in the router module."""
 
     def test_ok_normal(self):
-        # Import the router module
-        router_mod = _load_module_from_file(
-            "routers.tools",
-            BACKEND_DIR / "routers" / "tools.py",
-        )
         result = router_mod._ok("test_tool", "All good")
         assert result["tool_name"] == "test_tool"
         assert result["result_text"] == "All good"
         assert result["is_error"] is False
 
     def test_ok_error(self):
-        router_mod = sys.modules["routers.tools"]
         result = router_mod._ok("test_tool", "Error: something went wrong")
         assert result["is_error"] is True
 
@@ -521,18 +816,12 @@ class TestRouterEndpoints:
 
     @pytest.fixture(autouse=True)
     def setup_app(self):
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-
         # Override auth dependency
-        router_mod = sys.modules["routers.tools"]
         app = FastAPI()
         app.include_router(router_mod.router)
 
         # Override auth deps to return a fixed uid
-        from utils.other.endpoints import get_current_user_uid
-
-        app.dependency_overrides[get_current_user_uid] = lambda: "test-uid"
+        app.dependency_overrides[endpoints_mod.get_current_user_uid] = lambda: "test-uid"
         # Override rate-limited deps too — with_rate_limit returns a new dependency
         # so we need to override whatever it returned
         for route in app.routes:
@@ -568,6 +857,8 @@ class TestRouterEndpoints:
         action_items_db.create_action_item.return_value = "test-item-id"
         action_items_db.update_action_item.reset_mock()
         action_items_db.update_action_item.return_value = True
+        calendar_tools_mod.create_calendar_event_tool.calls.clear()
+        calendar_tools_mod.create_calendar_event_tool.next_result = None
 
     def test_get_conversations_endpoint(self):
         resp = self.client.get("/v1/tools/conversations")
@@ -622,6 +913,69 @@ class TestRouterEndpoints:
         assert body["tool_name"] == "update_action_item"
         assert "completed" in body["result_text"].lower()
 
+    def test_create_calendar_event_endpoint(self):
+        resp = self.client.post(
+            "/v1/tools/calendar-events",
+            json={
+                "title": "Design review",
+                "start_time": "2026-06-28T14:00:00-04:00",
+                "end_time": "2026-06-28T15:00:00-04:00",
+                "location": "Zoom",
+                "attendees": "sam@example.com",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["tool_name"] == "create_calendar_event"
+        assert "Design review" in body["result_text"]
+        assert body["is_error"] is False
+
+        tool_input, config = calendar_tools_mod.create_calendar_event_tool.calls[-1]
+        assert tool_input["title"] == "Design review"
+        assert tool_input["start_time"] == "2026-06-28T14:00:00-04:00"
+        assert tool_input["end_time"] == "2026-06-28T15:00:00-04:00"
+        assert tool_input["location"] == "Zoom"
+        assert tool_input["attendees"] == "sam@example.com"
+        assert config == {"configurable": {"user_id": "test-uid"}}
+
+    def test_create_calendar_event_rejects_malformed_datetimes(self):
+        resp = self.client.post(
+            "/v1/tools/calendar-events",
+            json={
+                "title": "Design review",
+                "start_time": "tomorrow at 2",
+                "end_time": "2026-06-28T15:00:00-04:00",
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_create_calendar_event_requires_timezone(self):
+        resp = self.client.post(
+            "/v1/tools/calendar-events",
+            json={
+                "title": "Design review",
+                "start_time": "2026-06-28T14:00:00",
+                "end_time": "2026-06-28T15:00:00-04:00",
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_create_calendar_event_marks_calendar_tool_failures_as_errors(self):
+        calendar_tools_mod.create_calendar_event_tool.next_result = "Google Calendar is not connected."
+        resp = self.client.post(
+            "/v1/tools/calendar-events",
+            json={
+                "title": "Design review",
+                "start_time": "2026-06-28T14:00:00-04:00",
+                "end_time": "2026-06-28T15:00:00-04:00",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["tool_name"] == "create_calendar_event"
+        assert body["result_text"] == "Google Calendar is not connected."
+        assert body["is_error"] is True
+
     def test_get_conversations_query_params(self):
         """Query params are forwarded correctly to the service."""
         resp = self.client.get("/v1/tools/conversations?limit=10&offset=5&include_transcript=false")
@@ -658,17 +1012,14 @@ class TestRateLimitPolicies:
     """Verify rate limit policies exist and are wired correctly."""
 
     def test_tools_search_policy_exists(self):
-        rl_mod = _load_module_from_file(
-            "utils.rate_limit_config",
-            BACKEND_DIR / "utils" / "rate_limit_config.py",
-        )
+        rl_mod = rate_limit_config_mod
         assert "tools:search" in rl_mod.RATE_POLICIES
         max_req, window = rl_mod.RATE_POLICIES["tools:search"]
         assert max_req == 60
         assert window == 3600
 
     def test_tools_mutate_policy_exists(self):
-        rl_mod = sys.modules["utils.rate_limit_config"]
+        rl_mod = rate_limit_config_mod
         assert "tools:mutate" in rl_mod.RATE_POLICIES
         max_req, window = rl_mod.RATE_POLICIES["tools:mutate"]
         assert max_req == 60

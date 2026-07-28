@@ -18,6 +18,11 @@ file(GLOB app_sources
     src/rtc.c
     src/imu.c
 )
+
+if(CONFIG_OMI_ENABLE_T5838_AAD)
+    # Hardware AAD is integrated into mic.c; t5838_aad.c is the low-level driver.
+    list(APPEND app_sources src/t5838_aad.c)
+endif()
 file(GLOB core_sources
     src/lib/core/config.h
     src/lib/core/codec.c

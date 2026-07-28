@@ -1,8 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import admin, { getDb } from "@/lib/firebase/admin";
 import { verifyAdmin } from "@/lib/auth";
+import { getUserGrowthSeries, sliceSeries } from "@/lib/services/user-growth";
+import { getPayload, setPayload } from "@/lib/payload-cache";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 3600;
+
+function cacheKey(daysParam: string): string {
+  return `daily-new-users:v1:${daysParam}`;
+}
+
+export { cacheKey as dailyNewUsersCacheKey };
+
+export async function computeDailyNewUsers(daysParam: string) {
+  const series = await getUserGrowthSeries();
+  return sliceSeries(series, daysParam);
+}
 
 export async function GET(request: NextRequest) {
   const authResult = await verifyAdmin(request);
@@ -10,54 +23,22 @@ export async function GET(request: NextRequest) {
 
   try {
     const { searchParams } = new URL(request.url);
-    const days = Math.min(parseInt(searchParams.get("days") || "30", 10), 90);
+    const daysParam = searchParams.get("days") || "all";
+    const key = cacheKey(daysParam);
 
-    const db = getDb();
-    const now = new Date();
-    const startDate = new Date(now);
-    startDate.setDate(startDate.getDate() - days);
-    startDate.setHours(0, 0, 0, 0);
-
-    const snapshot = await db
-      .collection("users")
-      .where("created_at", ">=", admin.firestore.Timestamp.fromDate(startDate))
-      .orderBy("created_at", "asc")
-      .get();
-
-    // Group by date
-    const countsByDate: Record<string, number> = {};
-
-    // Pre-fill all dates with 0
-    for (let i = 0; i < days; i++) {
-      const d = new Date(startDate);
-      d.setDate(d.getDate() + i);
-      const key = d.toISOString().split("T")[0];
-      countsByDate[key] = 0;
+    const cached = await getPayload<ReturnType<typeof sliceSeries>>(key);
+    if (cached) {
+      return NextResponse.json(cached.data);
     }
 
-    snapshot.docs.forEach((doc) => {
-      const data = doc.data();
-      if (data.created_at) {
-        const ts = data.created_at.toDate();
-        const key = ts.toISOString().split("T")[0];
-        if (countsByDate[key] !== undefined) {
-          countsByDate[key]++;
-        }
-      }
-    });
-
-    const data = Object.entries(countsByDate)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, users]) => ({ date, users }));
-
-    const totalUsers = data.reduce((sum, d) => sum + d.users, 0);
-
-    return NextResponse.json({ data, totalUsers, days });
+    const payload = await computeDailyNewUsers(daysParam);
+    await setPayload(key, payload);
+    return NextResponse.json(payload);
   } catch (error: any) {
     console.error("Daily new users error:", error);
     return NextResponse.json(
       { error: error.message || "Failed to fetch daily new users" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

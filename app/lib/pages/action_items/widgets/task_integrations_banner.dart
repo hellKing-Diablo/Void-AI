@@ -1,9 +1,9 @@
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:omi/gen/assets.gen.dart';
 import 'package:omi/pages/settings/task_integrations_page.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 
 class TaskIntegrationsBanner extends StatelessWidget {
@@ -16,7 +16,7 @@ class TaskIntegrationsBanner extends StatelessWidget {
         HapticFeedback.lightImpact();
 
         // Track banner click
-        MixpanelManager().exportTasksBannerClicked();
+        PlatformManager.instance.analytics.exportTasksBannerClicked();
 
         Navigator.of(context).push(MaterialPageRoute(builder: (context) => const TaskIntegrationsPage()));
       },
@@ -25,12 +25,12 @@ class TaskIntegrationsBanner extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [Colors.deepPurple.withOpacity(0.3), Colors.purple.withOpacity(0.3)],
+            colors: [Colors.deepPurple.withValues(alpha: 0.3), Colors.purple.withValues(alpha: 0.3)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Colors.deepPurpleAccent.withOpacity(0.2), width: 1),
+          border: Border.all(color: Colors.deepPurpleAccent.withValues(alpha: 0.2), width: 1),
         ),
         child: Row(
           children: [

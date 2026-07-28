@@ -4,7 +4,6 @@ import 'dart:math';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -17,30 +16,34 @@ import 'package:omi/services/notifications/action_item_notification_handler.dart
 import 'package:omi/services/notifications/important_conversation_notification_handler.dart';
 import 'package:omi/services/notifications/merge_notification_handler.dart';
 import 'package:omi/services/notifications/notification_interface.dart';
+import 'package:omi/services/voice_playback/omi_voice_playback_service.dart';
 import 'package:omi/utils/analytics/intercom.dart';
 import 'package:omi/utils/logger.dart';
+import 'package:omi/utils/notification_channel_strings.dart';
 
 /// Firebase Cloud Messaging enabled notification service
 /// Supports iOS, Android, macOS, web, and Linux with full FCM functionality
 class _FCMNotificationService implements NotificationInterface {
   _FCMNotificationService._();
 
-  MethodChannel platform = const MethodChannel('com.friend.ios/notifyOnKill');
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
 
-  final channel = NotificationChannel(
-    channelGroupKey: 'channel_group_key',
-    channelKey: 'channel',
-    channelName: 'Omi Notifications',
-    channelDescription: 'Notification channel for Omi',
-    defaultColor: const Color(0xFF9D50DD),
-    ledColor: Colors.white,
-  );
+  // Resolved in initialize() after NotificationChannelStrings.loadAppLocale().
+  late final NotificationChannel channel;
 
   final AwesomeNotifications _awesomeNotifications = AwesomeNotifications();
 
   @override
   Future<void> initialize() async {
+    await NotificationChannelStrings.loadAppLocale();
+    channel = NotificationChannel(
+      channelGroupKey: 'channel_group_key',
+      channelKey: 'channel',
+      channelName: NotificationChannelStrings.omiChannelName,
+      channelDescription: NotificationChannelStrings.omiChannelDescription,
+      defaultColor: const Color(0xFF9D50DD),
+      ledColor: Colors.white,
+    );
     await _initializeAwesomeNotifications();
     // Calling it here because the APNS token can sometimes arrive early or it might take some time (like a few seconds)
     // Reference: https://github.com/firebase/flutterfire/issues/12244#issuecomment-1969286794
@@ -118,16 +121,7 @@ class _FCMNotificationService implements NotificationInterface {
   }
 
   @override
-  Future<void> register() async {
-    try {
-      await platform.invokeMethod('setNotificationOnKillService', {
-        'title': "Your Omi Device Disconnected",
-        'description': "Please keep your app opened to continue using your Omi.",
-      });
-    } catch (e) {
-      Logger.debug('NotifOnKill error: $e');
-    }
-  }
+  Future<void> register() async {}
 
   @override
   Future<String> getTimeZone() async {
@@ -230,6 +224,9 @@ class _FCMNotificationService implements NotificationInterface {
         } else if (messageType == 'action_item_delete') {
           ActionItemNotificationHandler.handleDeletionMessage(data);
           return;
+        } else if (messageType == 'action_item_batch_delete') {
+          ActionItemNotificationHandler.handleBatchDeletionMessage(data);
+          return;
         } else if (messageType == 'merge_completed') {
           MergeNotificationHandler.handleMergeCompleted(data, channel.channelKey!, isAppInForeground: true);
           return;
@@ -249,14 +246,18 @@ class _FCMNotificationService implements NotificationInterface {
           _serverMessageStreamController.add(ServerMessage.fromJson(data));
         }
         if (noti != null && _shouldShowForegroundNotificationOnFCMMessageReceived()) {
-          _showForegroundNotification(noti: noti, payload: payload);
+          if (!OmiVoicePlaybackService.instance.isSpeaking) {
+            _showForegroundNotification(noti: noti, payload: payload);
+          }
         }
         return;
       }
 
       // Announcement likes
       if (noti != null && _shouldShowForegroundNotificationOnFCMMessageReceived()) {
-        _showForegroundNotification(noti: noti, layout: NotificationLayout.BigText);
+        if (!OmiVoicePlaybackService.instance.isSpeaking) {
+          _showForegroundNotification(noti: noti, layout: NotificationLayout.BigText);
+        }
         return;
       }
     });

@@ -110,22 +110,24 @@ class _WelcomePageState extends State<WelcomePage> with TickerProviderStateMixin
       });
       _expansionController.reset();
 
-      showDialog(
-        context: context,
-        builder: (c) => getDialog(
-          context,
-          () {
-            Navigator.of(context).pop();
-            openAppSettings();
-          },
-          () {},
-          context.l10n.permissionsRequired,
-          context.l10n.permissionsRequiredDesc,
-          okButtonText: context.l10n.openSettings,
-          singleButton: true,
-        ),
-        barrierDismissible: false,
-      );
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (c) => getDialog(
+            context,
+            () {
+              Navigator.of(context).pop();
+              openAppSettings();
+            },
+            () {},
+            context.l10n.permissionsRequired,
+            context.l10n.permissionsRequiredDesc,
+            okButtonText: context.l10n.openSettings,
+            singleButton: true,
+          ),
+          barrierDismissible: false,
+        );
+      }
     }
   }
 
@@ -164,8 +166,8 @@ class _WelcomePageState extends State<WelcomePage> with TickerProviderStateMixin
                           image: DecorationImage(
                             image: ResizeImage(
                               AssetImage(Assets.images.onboardingBg51.path),
-                              width: (MediaQuery.of(context).size.width * MediaQuery.of(context).devicePixelRatio)
-                                  .round(),
+                              width:
+                                  (MediaQuery.of(context).size.width * MediaQuery.of(context).devicePixelRatio).round(),
                               height: (MediaQuery.of(context).size.height * MediaQuery.of(context).devicePixelRatio)
                                   .round(),
                             ),
@@ -175,10 +177,10 @@ class _WelcomePageState extends State<WelcomePage> with TickerProviderStateMixin
                         child: Stack(
                           children: [
                             // Dim overlay
-                            Container(color: Colors.black.withOpacity(0.4)),
+                            Container(color: Colors.black.withValues(alpha: 0.4)),
                             // Fade to black overlay (increases during expansion)
                             if (_isExpandingTop)
-                              Container(color: Colors.black.withOpacity(_fadeToBlackAnimation.value * 0.9)),
+                              Container(color: Colors.black.withValues(alpha: _fadeToBlackAnimation.value * 0.9)),
                             // Content positioned in lower half
                             Positioned(
                               bottom: 60,
@@ -194,8 +196,8 @@ class _WelcomePageState extends State<WelcomePage> with TickerProviderStateMixin
                                     child: InkWell(
                                       onTap: _handleTopButtonPress,
                                       borderRadius: BorderRadius.circular(28),
-                                      splashColor: Colors.green.withOpacity(0.7),
-                                      highlightColor: Colors.green.withOpacity(0.1),
+                                      splashColor: Colors.green.withValues(alpha: 0.7),
+                                      highlightColor: Colors.green.withValues(alpha: 0.1),
                                       child: Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                                         child: Row(
@@ -260,7 +262,7 @@ class _WelcomePageState extends State<WelcomePage> with TickerProviderStateMixin
                           child: Stack(
                             children: [
                               // Dim overlay
-                              Container(color: Colors.black.withOpacity(0.5)),
+                              Container(color: Colors.black.withValues(alpha: 0.5)),
 
                               // Content positioned in lower half
                               Positioned(
@@ -276,8 +278,8 @@ class _WelcomePageState extends State<WelcomePage> with TickerProviderStateMixin
                                       child: InkWell(
                                         onTap: _handleBottomButtonPress,
                                         borderRadius: BorderRadius.circular(28),
-                                        splashColor: Colors.green.withOpacity(0.7),
-                                        highlightColor: Colors.green.withOpacity(0.1),
+                                        splashColor: Colors.green.withValues(alpha: 0.7),
+                                        highlightColor: Colors.green.withValues(alpha: 0.1),
                                         child: Container(
                                           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                                           decoration: BoxDecoration(

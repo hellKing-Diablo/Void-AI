@@ -1,6 +1,13 @@
 package com.friend.ios
 
 import android.content.Intent
+import com.friend.ios.ble.BleHostApiImpl
+import com.friend.ios.phonecalls.PhoneCallsPlugin
+import com.friend.ios.ble.OmiBleForegroundService
+import com.friend.ios.ble.OmiBleManager
+import com.friend.ios.ble.OmiCompanionManager
+import com.friend.ios.batch.OmiBackgroundAudioStreamer
+import com.friend.ios.phonemic.*
 import android.os.Bundle
 import androidx.annotation.NonNull
 import android.Manifest
@@ -14,6 +21,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "com.friend.ios/notifyOnKill"
+    private val NATIVE_BLE_TRANSCRIPT_CHANNEL = "com.friend.ios/native_ble_transcript"
     private var bleHostApiImpl: BleHostApiImpl? = null
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
@@ -27,12 +35,29 @@ class MainActivity: FlutterActivity() {
 
         // Register Native BLE Pigeon APIs
         OmiBleManager.initialize(application)
+        getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+            .edit()
+            .putBoolean("flutter.nativeBleForegroundReady", false)
+            .apply()
         OmiBleManager.isFlutterAlive = true
         OmiBleManager.instance.flutterApi = BleFlutterApi(flutterEngine.dartExecutor.binaryMessenger)
         val hostApi = BleHostApiImpl { this }
         hostApi.initCompanionManager(this)
         bleHostApiImpl = hostApi
         BleHostApi.setUp(flutterEngine.dartExecutor.binaryMessenger, hostApi)
+
+        // Register Native Phone Mic Pigeon APIs
+        PhoneMicController.initialize(application)
+        PhoneMicController.instance.bindFlutterApi(PhoneMicFlutterApi(flutterEngine.dartExecutor.binaryMessenger))
+        PhoneMicHostApi.setUp(flutterEngine.dartExecutor.binaryMessenger, PhoneMicHostApiImpl(PhoneMicController.instance))
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, NATIVE_BLE_TRANSCRIPT_CHANNEL).setMethodCallHandler {
+            call, result ->
+            if (call.method == "drain") {
+                result.success(OmiBackgroundAudioStreamer.drainCachedTranscriptMessages())
+            } else {
+                result.notImplemented()
+            }
+        }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler {
             call, result ->
@@ -64,12 +89,27 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        OmiBleManager.isAppForeground = true
+    }
+
+    override fun onPause() {
+        OmiBleManager.isAppForeground = false
+        super.onPause()
+    }
+
     override fun onDestroy() {
-        // When user closes the app (swipe away), stop the foreground service.
-        // The service handles disconnecting all managed devices in onDestroy.
         if (isFinishing) {
             OmiBleManager.isFlutterAlive = false
-            OmiBleForegroundService.stopService(this)
+            // Engine + main isolate die with the activity; a live capture session must not outlive its consumer.
+            if (PhoneMicController.isInitialized) PhoneMicController.instance.onFlutterEngineDestroyed()
+            // Background Mode and Transcribe Later both need the foreground service to keep
+            // the device connected/capturing after a task close. With both off (default),
+            // tear it down so the device disconnects when the app is closed.
+            if (!OmiBleForegroundService.isPersistentModeEnabled(this)) {
+                OmiBleForegroundService.stopService(this)
+            }
         }
         super.onDestroy()
     }

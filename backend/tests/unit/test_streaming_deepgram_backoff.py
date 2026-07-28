@@ -7,37 +7,14 @@ Verifies:
 """
 
 import asyncio
-import sys
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
-# Mock heavy dependencies before importing streaming module
-_mock_modules = {}
-for mod_name in [
-    'database',
-    'database._client',
-    'database.users',
-    'utils.other.storage',
-    'deepgram',
-    'deepgram.clients',
-    'deepgram.clients.live',
-    'deepgram.clients.live.v1',
-    'websockets',
-    'websockets.exceptions',
-]:
-    if mod_name not in sys.modules:
-        _mock_modules[mod_name] = MagicMock()
-        sys.modules[mod_name] = _mock_modules[mod_name]
-
-# Provide expected attributes for type-annotation imports
-sys.modules['deepgram'].DeepgramClient = MagicMock
-sys.modules['deepgram'].DeepgramClientOptions = MagicMock
-sys.modules['deepgram'].LiveTranscriptionEvents = MagicMock()
-sys.modules['deepgram.clients.live.v1'].LiveOptions = MagicMock
-
-from utils.stt.streaming import connect_to_deepgram_with_backoff, process_audio_dg  # noqa: E402
-from utils.stt.streaming import deepgram_options, deepgram_cloud_options  # noqa: E402
+from deepgram import LiveTranscriptionEvents
+from config.stt_provider_policy import STTServingSurface
+from utils.stt.streaming import connect_to_deepgram_with_backoff, process_audio_dg
+from utils.stt.streaming import get_stt_service_for_language, STTService, should_preserve_filler_words
 
 
 @pytest.mark.asyncio
@@ -51,7 +28,7 @@ async def test_returns_connection_on_first_success():
             language='en',
             sample_rate=16000,
             channels=1,
-            model='nova-2-general',
+            model='nova-3',
         )
     assert result is mock_conn
 
@@ -83,7 +60,7 @@ async def test_retries_with_async_sleep():
             language='en',
             sample_rate=16000,
             channels=1,
-            model='nova-2-general',
+            model='nova-3',
             retries=3,
         )
 
@@ -109,7 +86,7 @@ async def test_raises_after_all_retries_exhausted():
                 language='en',
                 sample_rate=16000,
                 channels=1,
-                model='nova-2-general',
+                model='nova-3',
                 retries=3,
             )
 
@@ -124,7 +101,7 @@ async def test_aborts_before_first_attempt_when_inactive():
             language='en',
             sample_rate=16000,
             channels=1,
-            model='nova-2-general',
+            model='nova-3',
             is_active=lambda: False,
         )
     assert result is None
@@ -152,7 +129,7 @@ async def test_aborts_between_retries_when_inactive():
             language='en',
             sample_rate=16000,
             channels=1,
-            model='nova-2-general',
+            model='nova-3',
             retries=3,
             is_active=lambda: active[0],
         )
@@ -184,7 +161,7 @@ async def test_is_active_none_skips_check():
             language='en',
             sample_rate=16000,
             channels=1,
-            model='nova-2-general',
+            model='nova-3',
             retries=3,
             is_active=None,
         )
@@ -203,7 +180,7 @@ async def test_retries_zero_raises_immediately():
                 language='en',
                 sample_rate=16000,
                 channels=1,
-                model='nova-2-general',
+                model='nova-3',
                 retries=0,
             )
     mock_connect.assert_not_called()
@@ -227,36 +204,35 @@ async def test_retries_one_failure_raises_no_sleep():
                 language='en',
                 sample_rate=16000,
                 channels=1,
-                model='nova-2-general',
+                model='nova-3',
                 retries=1,
             )
     assert len(sleep_calls) == 0  # no sleep with only 1 retry
 
 
 @pytest.mark.asyncio
-async def test_connect_uses_asyncio_to_thread():
-    """connect_to_deepgram is offloaded via asyncio.to_thread to avoid blocking the event loop."""
+async def test_connect_uses_run_blocking():
+    """connect_to_deepgram is offloaded via run_blocking to avoid blocking the event loop."""
     mock_conn = MagicMock()
 
-    async def fake_to_thread(func, *args):
-        return func(*args)
+    async def fake_run_blocking(_executor, func, *args, **kwargs):
+        return func(*args, **kwargs)
 
     with patch('utils.stt.streaming.connect_to_deepgram', return_value=mock_conn) as mock_connect, patch(
-        'utils.stt.streaming.asyncio.to_thread', side_effect=fake_to_thread
-    ) as mock_to_thread:
+        'utils.stt.streaming.run_blocking', side_effect=fake_run_blocking
+    ) as mock_run_blocking:
         result = await connect_to_deepgram_with_backoff(
             on_message=MagicMock(),
             on_error=MagicMock(),
             language='en',
             sample_rate=16000,
             channels=1,
-            model='nova-2-general',
+            model='nova-3',
         )
     assert result is mock_conn
-    mock_to_thread.assert_called_once()
-    # Verify connect_to_deepgram was passed as the first arg to to_thread
-    call_args = mock_to_thread.call_args
-    assert call_args[0][0] is mock_connect
+    mock_run_blocking.assert_called_once()
+    call_args = mock_run_blocking.call_args
+    assert call_args[0][1] is mock_connect
 
 
 @pytest.mark.asyncio
@@ -274,27 +250,87 @@ async def test_process_audio_dg_returns_none_when_inactive():
 
 
 @pytest.mark.asyncio
-async def test_process_audio_dg_no_vad_wrap_on_none():
-    """process_audio_dg does not wrap None with GatedDeepgramSocket when VAD gate is provided."""
-    mock_gate = MagicMock()
+async def test_process_audio_dg_returns_none_on_failed_connection():
+    """process_audio_dg returns None when connection cannot be established."""
     with patch('utils.stt.streaming.connect_to_deepgram_with_backoff', new_callable=AsyncMock, return_value=None):
         result = await process_audio_dg(
             stream_transcript=MagicMock(),
             language='en',
             sample_rate=16000,
             channels=1,
-            vad_gate=mock_gate,
             is_active=lambda: False,
         )
     assert result is None
 
 
-def test_deepgram_options_no_keepalive():
-    """SDK keepalive option must not be present — it spawns a dangerous background thread (#5870)."""
-    for name, opts in [('deepgram_options', deepgram_options), ('deepgram_cloud_options', deepgram_cloud_options)]:
-        # DeepgramClientOptions stores options dict — keepalive key must be absent
-        if hasattr(opts, 'options') and isinstance(opts.options, dict):
-            assert 'keepalive' not in opts.options, f'{name} must not contain "keepalive" key'
+@pytest.mark.asyncio
+async def test_retries_on_none_then_succeeds():
+    """When connect_to_deepgram returns None (start()==False), backoff retries and succeeds on later attempt."""
+    mock_conn = MagicMock()
+    call_count = 0
+
+    def none_then_succeed(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            return None  # start() returned False
+        return mock_conn
+
+    sleep_calls = []
+
+    async def fake_sleep(duration):
+        sleep_calls.append(duration)
+
+    with patch('utils.stt.streaming.connect_to_deepgram', side_effect=none_then_succeed), patch(
+        'utils.stt.streaming.asyncio.sleep', side_effect=fake_sleep
+    ):
+        result = await connect_to_deepgram_with_backoff(
+            on_message=MagicMock(),
+            on_error=MagicMock(),
+            language='en',
+            sample_rate=16000,
+            channels=1,
+            model='nova-3',
+            retries=3,
+        )
+
+    assert result is mock_conn
+    assert call_count == 3
+    assert len(sleep_calls) == 2  # slept between attempt 1->2 and 2->3
+
+
+@pytest.mark.asyncio
+async def test_returns_none_after_all_none_retries_exhausted():
+    """When connect_to_deepgram returns None on all attempts, backoff returns None (not raise)."""
+    sleep_calls = []
+
+    async def fake_sleep(duration):
+        sleep_calls.append(duration)
+
+    with patch('utils.stt.streaming.connect_to_deepgram', return_value=None), patch(
+        'utils.stt.streaming.asyncio.sleep', side_effect=fake_sleep
+    ):
+        result = await connect_to_deepgram_with_backoff(
+            on_message=MagicMock(),
+            on_error=MagicMock(),
+            language='en',
+            sample_rate=16000,
+            channels=1,
+            model='nova-3',
+            retries=3,
+        )
+
+    assert result is None
+    assert len(sleep_calls) == 2  # slept between retries
+
+
+def test_self_hosted_deepgram_options_never_enable_keepalive():
+    """The retained self-hosted socket must not create a keepalive thread (#5870)."""
+    from utils.stt.streaming import _self_hosted_deepgram_options
+
+    opts = _self_hosted_deepgram_options('https://dg.example.test')
+    assert 'keepalive' not in opts.options
+    assert opts.url == 'https://dg.example.test'
 
 
 @pytest.mark.asyncio
@@ -318,13 +354,11 @@ async def test_process_audio_dg_returns_safe_socket_no_gate():
 
 
 @pytest.mark.asyncio
-async def test_process_audio_dg_returns_gated_socket_with_gate():
-    """process_audio_dg returns GatedDeepgramSocket wrapping SafeDeepgramSocket when VAD gate provided (#5870)."""
+async def test_process_audio_dg_returns_safe_socket_always():
+    """process_audio_dg always returns SafeDeepgramSocket; VAD wrapping is done by caller (#7140)."""
     from utils.stt.safe_socket import SafeDeepgramSocket
-    from utils.stt.vad_gate import GatedDeepgramSocket, VADStreamingGate
 
     mock_dg_conn = MagicMock()
-    mock_gate = VADStreamingGate(sample_rate=16000, channels=1, mode='active', uid='test', session_id='test')
     with patch(
         'utils.stt.streaming.connect_to_deepgram_with_backoff', new_callable=AsyncMock, return_value=mock_dg_conn
     ):
@@ -333,14 +367,13 @@ async def test_process_audio_dg_returns_gated_socket_with_gate():
             language='en',
             sample_rate=16000,
             channels=1,
-            vad_gate=mock_gate,
         )
-    assert isinstance(result, GatedDeepgramSocket)
-    assert isinstance(result._conn, SafeDeepgramSocket)
+    assert isinstance(result, SafeDeepgramSocket)
     assert result.is_connection_dead is False
     result.finish()
 
 
+@pytest.mark.slow
 def test_auto_keepalive_sends_during_idle():
     """SafeDeepgramSocket auto-keepalive thread sends keepalive when idle > interval (#5870).
 
@@ -384,6 +417,7 @@ def test_auto_keepalive_sends_during_idle():
         safe.finish()
 
 
+@pytest.mark.slow
 def test_auto_keepalive_stops_on_dead():
     """Auto-keepalive thread stops when connection dies (#5870)."""
     from utils.stt.safe_socket import KeepaliveConfig, SafeDeepgramSocket
@@ -420,6 +454,7 @@ def test_auto_keepalive_stops_on_dead():
         safe.finish()
 
 
+@pytest.mark.slow
 def test_auto_keepalive_resets_on_send():
     """send() resets idle timer, preventing unnecessary keepalives (#5870)."""
     from utils.stt.safe_socket import KeepaliveConfig, SafeDeepgramSocket
@@ -467,6 +502,7 @@ def test_keepalive_config_validation():
         KeepaliveConfig(check_period_sec=-1)
 
 
+@pytest.mark.slow
 def test_concurrent_send_and_keepalive():
     """Thread safety: concurrent send() calls while keepalive thread fires (#5870).
 
@@ -479,12 +515,18 @@ def test_concurrent_send_and_keepalive():
     mock_conn.keep_alive.return_value = True
     mock_conn.send.return_value = True
 
+    # Auto-advancing clock: each call jumps forward past keepalive_interval so
+    # elapsed always exceeds the threshold even when sends reset _last_activity.
+    # This simulates real monotonic time where gaps between lock acquisitions
+    # allow enough time to pass for keepalive to fire.
     fake_time = [0.0]
     lock = threading.Lock()
 
     def clock():
         with lock:
-            return fake_time[0]
+            v = fake_time[0]
+            fake_time[0] += 3.0
+            return v
 
     cfg = KeepaliveConfig(keepalive_interval_sec=2.0, check_period_sec=0.01)
     safe = SafeDeepgramSocket(mock_conn, cfg=cfg, clock=clock)
@@ -499,13 +541,9 @@ def test_concurrent_send_and_keepalive():
                 except Exception as e:
                     errors.append(e)
 
-        # Advance clock past keepalive interval FIRST so keepalive fires
-        with lock:
-            fake_time[0] = 3.0
-
         import time
 
-        time.sleep(0.1)  # Let keepalive thread fire
+        time.sleep(0.2)  # Let keepalive thread fire during idle
 
         # Verify keepalive actually fired during this idle window
         assert mock_conn.keep_alive.call_count >= 1, "keepalive must fire before concurrent sends start"
@@ -515,10 +553,7 @@ def test_concurrent_send_and_keepalive():
         threads = [threading.Thread(target=sender) for _ in range(3)]
         for t in threads:
             t.start()
-        # Advance clock again so keepalive fires during contention
-        with lock:
-            fake_time[0] = 6.0
-        time.sleep(0.1)  # Let keepalive thread fire during send contention
+        time.sleep(0.2)  # Let keepalive thread fire during send contention
         for t in threads:
             t.join(timeout=5.0)
 
@@ -530,6 +565,7 @@ def test_concurrent_send_and_keepalive():
         safe.finish()
 
 
+@pytest.mark.slow
 def test_keepalive_fires_at_exact_threshold():
     """Keepalive fires when elapsed == interval (boundary) (#5870)."""
     from utils.stt.safe_socket import KeepaliveConfig, SafeDeepgramSocket
@@ -558,6 +594,7 @@ def test_keepalive_fires_at_exact_threshold():
         safe.finish()
 
 
+@pytest.mark.slow
 def test_repeated_idle_sends_multiple_keepalives():
     """Repeated idle periods send multiple keepalives (#5870)."""
     from utils.stt.safe_socket import KeepaliveConfig, SafeDeepgramSocket
@@ -667,6 +704,7 @@ def test_death_reason_on_send_exception():
         safe.finish()
 
 
+@pytest.mark.slow
 def test_death_reason_on_keepalive_false():
     """death_reason records keepalive failure when keep_alive returns False."""
     import time as _time
@@ -689,6 +727,7 @@ def test_death_reason_on_keepalive_false():
         safe.finish()
 
 
+@pytest.mark.slow
 def test_death_reason_on_keepalive_exception():
     """death_reason captures exception on keepalive failure."""
     import time as _time
@@ -713,7 +752,7 @@ def test_death_reason_on_keepalive_exception():
 
 
 def test_set_close_reason_stores_first_reason():
-    """set_close_reason stores only the first reason (root cause)."""
+    """A provider callback latches terminal death and preserves its root cause."""
     from utils.stt.safe_socket import KeepaliveConfig, SafeDeepgramSocket
 
     mock_conn = MagicMock()
@@ -723,6 +762,9 @@ def test_set_close_reason_stores_first_reason():
         assert safe.death_reason is None
         safe.set_close_reason('DG close event: code=1006')
         assert safe.death_reason == 'DG close event: code=1006'
+        assert safe.is_connection_dead is True
+        assert safe.send(b'late-audio') is False
+        mock_conn.send.assert_not_called()
         # Second call is a no-op
         safe.set_close_reason('DG error event: something else')
         assert safe.death_reason == 'DG close event: code=1006'
@@ -748,6 +790,7 @@ def test_set_close_reason_does_not_override_send_death():
         safe.finish()
 
 
+@pytest.mark.slow
 def test_set_close_reason_does_not_override_keepalive_death():
     """If keepalive fails first, set_close_reason doesn't override the death reason."""
     import time as _time
@@ -793,6 +836,7 @@ def test_close_reason_preserved_when_send_fails_after():
         safe.finish()
 
 
+@pytest.mark.slow
 def test_close_reason_preserved_when_keepalive_fails_after():
     """If close reason is set first, subsequent keepalive failure does not override it (#6036)."""
     import time as _time
@@ -836,6 +880,7 @@ def test_close_reason_preserved_when_send_raises_after():
         safe.finish()
 
 
+@pytest.mark.slow
 def test_close_reason_preserved_when_keepalive_raises_after():
     """If close reason is set first, subsequent keepalive exception does not override it (#6036)."""
     import time as _time
@@ -884,17 +929,19 @@ async def test_process_audio_dg_registers_close_error_handlers():
     # Verify .on() was called for Close and Error events
     on_calls = mock_dg_conn.on.call_args_list
     registered_events = [call[0][0] for call in on_calls]
-    LiveTranscriptionEvents = sys.modules['deepgram'].LiveTranscriptionEvents
     assert LiveTranscriptionEvents.Close in registered_events
     assert LiveTranscriptionEvents.Error in registered_events
 
-    # Invoke the close handler and verify it sets death_reason
+    # Invoke the close handler and verify it terminally latches the wrapper.
     for call in on_calls:
         event, handler = call[0][0], call[0][1]
         if event == LiveTranscriptionEvents.Close:
             handler(None, 'CloseResponse(type=Close)')
             break
     assert result.death_reason == 'DG close event: CloseResponse(type=Close)'
+    assert result.is_connection_dead is True
+    assert result.send(b'late-audio') is False
+    mock_dg_conn.send.assert_not_called()
     result.finish()
 
 
@@ -916,13 +963,13 @@ async def test_process_audio_dg_error_handler_sets_death_reason():
     assert isinstance(result, SafeDeepgramSocket)
 
     on_calls = mock_dg_conn.on.call_args_list
-    LiveTranscriptionEvents = sys.modules['deepgram'].LiveTranscriptionEvents
     for call in on_calls:
         event, handler = call[0][0], call[0][1]
         if event == LiveTranscriptionEvents.Error:
             handler(None, 'ErrorResponse(message=server_error)')
             break
     assert result.death_reason == 'DG error event: ErrorResponse(message=server_error)'
+    assert result.is_connection_dead is True
     result.finish()
 
 
@@ -961,3 +1008,277 @@ def test_gated_socket_death_reason_delegates_none_when_alive():
         assert gated.death_reason is None
     finally:
         safe.finish()
+
+
+# ---------------------------------------------------------------------------
+# get_stt_service_for_language — non-Deepgram serving selection
+# ---------------------------------------------------------------------------
+
+
+class TestGetSttServiceForLanguage:
+    """Verify serving selection cannot reactivate retired Deepgram models."""
+
+    def test_english_prefers_parakeet(self):
+        with patch('utils.stt.streaming.stt_service_models', ['parakeet']), patch.dict(
+            'os.environ', {'HOSTED_PARAKEET_API_URL': 'http://parakeet.test'}
+        ):
+            service, lang, model = get_stt_service_for_language('en', multi_lang_enabled=False)
+
+        assert (service, lang, model) == (STTService.parakeet, 'en', 'parakeet')
+
+    def test_cjk_uses_modulate_when_parakeet_is_not_capable(self):
+        with patch('utils.stt.streaming.stt_service_models', ['parakeet', 'modulate-velma-2']), patch.dict(
+            'os.environ', {'HOSTED_PARAKEET_API_URL': 'http://parakeet.test'}
+        ):
+            service, lang, model = get_stt_service_for_language('zh-TW', multi_lang_enabled=False)
+
+        assert (service, lang, model) == (STTService.modulate, 'zh', 'velma-2')
+
+    def test_retired_configuration_uses_non_deepgram_defaults(self):
+        with patch('utils.stt.streaming.stt_service_models', ['dg-nova-3']), patch.dict(
+            'os.environ', {'HOSTED_PARAKEET_API_URL': 'http://parakeet.test'}
+        ):
+            service, lang, model = get_stt_service_for_language('en', multi_lang_enabled=False)
+
+        # After #10048 fix: Deepgram retirement is subtractive; Modulate is the safe primary
+        assert (service, lang, model) == (STTService.modulate, 'en', 'velma-2')
+
+    def test_unsupported_language_fails_closed(self):
+        with patch('utils.stt.streaming.stt_service_models', ['modulate-velma-2']):
+            assert get_stt_service_for_language('xx-INVALID') == (None, None, None)
+
+    def test_missing_language_defaults_to_english(self):
+        with patch('utils.stt.streaming.stt_service_models', ['parakeet']), patch.dict(
+            'os.environ', {'HOSTED_PARAKEET_API_URL': 'http://parakeet.test'}
+        ):
+            service, lang, model = get_stt_service_for_language(None)
+
+        assert (service, lang, model) == (STTService.parakeet, 'en', 'parakeet')
+
+
+@pytest.mark.parametrize(
+    ('language', 'multi_lang_enabled', 'surface', 'preferred_service', 'expected'),
+    [
+        ('multi', False, STTServingSurface.STREAMING, None, (STTService.modulate, 'multi', 'velma-2')),
+        ('en', True, STTServingSurface.STREAMING, None, (STTService.modulate, 'multi', 'velma-2')),
+        ('en', True, STTServingSurface.STREAMING, 'parakeet', (STTService.modulate, 'multi', 'velma-2')),
+        ('es', True, STTServingSurface.STREAMING, 'parakeet', (STTService.modulate, 'multi', 'velma-2')),
+        ('zh-TW', True, STTServingSurface.STREAMING, None, (STTService.modulate, 'multi', 'velma-2')),
+        ('ar', True, STTServingSurface.STREAMING, None, (STTService.modulate, 'multi', 'velma-2')),
+        ('es', False, STTServingSurface.STREAMING, None, (STTService.modulate, 'es', 'velma-2')),
+        ('es', False, STTServingSurface.STREAMING, 'parakeet', (STTService.modulate, 'es', 'velma-2')),
+        ('en', False, STTServingSurface.STREAMING, 'parakeet', (STTService.parakeet, 'en', 'parakeet')),
+        ('es', True, STTServingSurface.PTT, None, (STTService.modulate, 'es', 'velma-2')),
+    ],
+)
+def test_selection_respects_model_capability_and_live_multilingual_mode(
+    language, multi_lang_enabled, surface, preferred_service, expected
+):
+    with patch('utils.stt.streaming.stt_service_models', ['parakeet', 'modulate-velma-2']), patch.dict(
+        'os.environ', {'HOSTED_PARAKEET_API_URL': 'http://parakeet.test'}
+    ):
+        result = get_stt_service_for_language(
+            language,
+            multi_lang_enabled=multi_lang_enabled,
+            surface=surface,
+            preferred_service=preferred_service,
+        )
+
+    assert result == expected
+
+
+def test_explicit_parakeet_preference_reorders_only_a_capable_live_selection():
+    with patch('utils.stt.streaming.stt_service_models', ['modulate-velma-2', 'parakeet']), patch.dict(
+        'os.environ', {'HOSTED_PARAKEET_API_URL': 'http://parakeet.test'}
+    ):
+        result = get_stt_service_for_language('en', multi_lang_enabled=False, preferred_service='parakeet')
+
+    assert result == (STTService.parakeet, 'en', 'parakeet')
+
+
+class TestFillerWordsLanguageBehavior:
+    """Filler words should be stripped for English but preserved for all other languages (#6575).
+
+    Deepgram's filler_words=False strips "um", "uh" etc. This is desirable for English
+    but destructive for other languages where those sounds are real words (e.g. Portuguese "um" = "a/one").
+    """
+
+    def _get_filler_words_option(self, language):
+        """Call connect_to_deepgram with given language and capture the filler_words option."""
+        from types import SimpleNamespace
+        from utils.stt.streaming import connect_to_deepgram
+
+        captured = {}
+
+        def capture_live_options(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(**kwargs)
+
+        mock_dg_conn = MagicMock()
+        mock_dg_conn.on = MagicMock()
+        mock_dg_conn.start.return_value = True
+
+        mock_client = MagicMock()
+        mock_client.listen.websocket.v.return_value = mock_dg_conn
+
+        with patch('utils.stt.streaming._deepgram_client_for_request', return_value=mock_client), patch(
+            'utils.stt.streaming.LiveOptions', side_effect=capture_live_options
+        ):
+            connect_to_deepgram(
+                on_message=MagicMock(),
+                on_error=MagicMock(),
+                language=language,
+                sample_rate=16000,
+                channels=1,
+                model='nova-3',
+            )
+
+        return captured['filler_words']
+
+    def test_english_strips_fillers(self):
+        """English ('en') should strip filler words (filler_words=False)."""
+        assert self._get_filler_words_option('en') is False
+
+    def test_english_us_strips_fillers(self):
+        """American English ('en-US') should strip filler words."""
+        assert self._get_filler_words_option('en-US') is False
+
+    def test_english_gb_strips_fillers(self):
+        """British English ('en-GB') should strip filler words."""
+        assert self._get_filler_words_option('en-GB') is False
+
+    def test_english_au_strips_fillers(self):
+        """Australian English ('en-AU') should strip filler words."""
+        assert self._get_filler_words_option('en-AU') is False
+
+    def test_english_in_strips_fillers(self):
+        """Indian English ('en-IN') should strip filler words."""
+        assert self._get_filler_words_option('en-IN') is False
+
+    def test_multi_preserves_fillers(self):
+        """Multi-language mode should preserve filler words (#6575)."""
+        assert self._get_filler_words_option('multi') is True
+
+    def test_portuguese_preserves_fillers(self):
+        """Portuguese ('pt') should preserve fillers — 'um' means 'a/one' (#6575)."""
+        assert self._get_filler_words_option('pt') is True
+
+    def test_portuguese_br_preserves_fillers(self):
+        """Brazilian Portuguese ('pt-BR') should preserve fillers."""
+        assert self._get_filler_words_option('pt-BR') is True
+
+    def test_spanish_preserves_fillers(self):
+        """Spanish ('es') should preserve filler words."""
+        assert self._get_filler_words_option('es') is True
+
+    def test_french_preserves_fillers(self):
+        """French ('fr') should preserve filler words."""
+        assert self._get_filler_words_option('fr') is True
+
+    def test_german_preserves_fillers(self):
+        """German ('de') should preserve filler words."""
+        assert self._get_filler_words_option('de') is True
+
+    def test_japanese_preserves_fillers(self):
+        """Japanese ('ja') should preserve filler words."""
+        assert self._get_filler_words_option('ja') is True
+
+    def test_hindi_preserves_fillers(self):
+        """Hindi ('hi') should preserve filler words."""
+        assert self._get_filler_words_option('hi') is True
+
+    def test_russian_preserves_fillers(self):
+        """Russian ('ru') should preserve filler words."""
+        assert self._get_filler_words_option('ru') is True
+
+    def test_korean_preserves_fillers(self):
+        """Korean ('ko') should preserve filler words."""
+        assert self._get_filler_words_option('ko') is True
+
+    def test_chinese_preserves_fillers(self):
+        """Chinese ('zh') should preserve filler words."""
+        assert self._get_filler_words_option('zh') is True
+
+
+class TestConnectKeywordsNoneGuard:
+    """connect_to_deepgram must tolerate keywords=None.
+
+    The multi-channel / phone-call path opens the STT socket without passing a
+    vocabulary list, so keywords arrives as None. Previously `if len(keywords) > 0`
+    raised "object of type 'NoneType' has no len()", which aborted the socket open
+    ("Could not open socket: ...") and left the client stuck reconnecting. This is a
+    regression guard for that phone-call breakage.
+    """
+
+    def _connect(self, keywords):
+        """Call connect_to_deepgram with the given keywords; return (raised, keyword_set_called)."""
+        from utils.stt.streaming import connect_to_deepgram
+
+        mock_dg_conn = MagicMock()
+        mock_dg_conn.on = MagicMock()
+        mock_dg_conn.start.return_value = True
+
+        mock_client = MagicMock()
+        mock_client.listen.websocket.v.return_value = mock_dg_conn
+
+        keyword_set = MagicMock(side_effect=lambda options, kw: options)
+
+        with patch('utils.stt.streaming._deepgram_client_for_request', return_value=mock_client), patch(
+            'utils.stt.streaming.LiveOptions', side_effect=lambda **kwargs: MagicMock()
+        ), patch('utils.stt.streaming._dg_keywords_set', keyword_set):
+            result = connect_to_deepgram(
+                on_message=MagicMock(),
+                on_error=MagicMock(),
+                language='en',
+                sample_rate=16000,
+                channels=2,
+                model='nova-3',
+                keywords=keywords,
+            )
+        return result, keyword_set.called
+
+    def test_none_keywords_does_not_raise(self):
+        """keywords=None (phone-call path) opens the socket without crashing."""
+        result, keyword_set_called = self._connect(None)
+        assert result is not None  # socket opened (start() returned True)
+        assert keyword_set_called is False  # no keyterms applied when none given
+
+    def test_empty_keywords_does_not_apply(self):
+        """keywords=[] opens the socket and applies no keyterms."""
+        result, keyword_set_called = self._connect([])
+        assert result is not None
+        assert keyword_set_called is False
+
+    def test_nonempty_keywords_applied(self):
+        """A real vocabulary list (single-channel path) is still applied to the options."""
+        result, keyword_set_called = self._connect(['Omi'])
+        assert result is not None
+        assert keyword_set_called is True
+
+
+class TestShouldPreserveFillerWords:
+    """Direct tests for the should_preserve_filler_words helper (#6575)."""
+
+    def test_english_false(self):
+        assert should_preserve_filler_words('en') is False
+
+    def test_english_us_false(self):
+        assert should_preserve_filler_words('en-US') is False
+
+    def test_english_gb_false(self):
+        assert should_preserve_filler_words('en-GB') is False
+
+    def test_multi_true(self):
+        assert should_preserve_filler_words('multi') is True
+
+    def test_portuguese_true(self):
+        assert should_preserve_filler_words('pt') is True
+
+    def test_portuguese_br_true(self):
+        assert should_preserve_filler_words('pt-BR') is True
+
+    def test_spanish_true(self):
+        assert should_preserve_filler_words('es') is True
+
+    def test_arabic_true(self):
+        assert should_preserve_filler_words('ar') is True

@@ -3,14 +3,19 @@ Shared service functions for conversation retrieval.
 Used by both LangChain tools (mobile chat) and REST router (desktop/web).
 """
 
+import re
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Set
 
 import database.conversations as conversations_db
+import database.notifications as notification_db
 import database.users as users_db
 import database.vector_db as vector_db
 from models.conversation import Conversation
 from models.other import Person
+from utils.conversations.factory import deserialize_conversation
+from utils.conversations.render import conversations_to_string
+from utils.conversations.search import keyword_search_conversation_ids, merge_conversation_search_ids
 import logging
 
 logger = logging.getLogger(__name__)
@@ -18,7 +23,9 @@ logger = logging.getLogger(__name__)
 
 def parse_iso_date(date_str: str, param_name: str) -> datetime:
     """Parse ISO date string with timezone. Raises ValueError on bad format."""
-    dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+    # Recover '+' lost to URL query param decoding (servers decode '+' as space)
+    cleaned = re.sub(r' (\d{2}:\d{2})$', r'+\1', date_str)
+    dt = datetime.fromisoformat(cleaned.replace('Z', '+00:00'))
     if dt.tzinfo is None:
         raise ValueError(
             f"{param_name} must include timezone in format YYYY-MM-DDTHH:MM:SS+HH:MM "
@@ -62,7 +69,7 @@ def get_conversations_text(
             return f"Error: Invalid end_date format: {e}"
 
     # Parse statuses
-    status_list = []
+    status_list: List[str] = []
     if statuses:
         status_list = [s.strip() for s in statuses.split(',') if s.strip()]
 
@@ -96,21 +103,29 @@ def get_conversations_text(
         return f"No conversations found{date_info}."
 
     # Load people for speaker names
-    people = []
+    people: List[Person] = []
     if include_transcript:
-        all_person_ids = set()
+        all_person_ids: Set[str] = set()
         for conv_data in conversations_data:
             segments = conv_data.get('transcript_segments', [])
             all_person_ids.update([s.get('person_id') for s in segments if s.get('person_id')])
         if all_person_ids:
             people_data = users_db.get_people_by_ids(uid, list(all_person_ids))
-            people = [Person(**p) for p in people_data]
+            for p in people_data:
+                try:
+                    people.append(Person(**p))
+                except Exception as e:
+                    # A legacy/malformed person doc (e.g. missing the required name) must not 500 the
+                    # whole conversation list; skip it so that speaker's name just goes unresolved. Mirrors
+                    # the deserialize_conversation loop below and search_conversations_text's guard.
+                    logger.warning(f"get_conversations_text skipping malformed person {p.get('id')}: {e}")
+                    continue
 
     # Convert to objects
-    conversations = []
+    conversations: List[Conversation] = []
     for conv_data in conversations_data:
         try:
-            conversation = Conversation(**conv_data)
+            conversation = deserialize_conversation(conv_data)
             if (
                 max_transcript_segments != -1
                 and conversation.transcript_segments
@@ -122,8 +137,12 @@ def get_conversations_text(
             logger.error(f"Error parsing conversation {conv_data.get('id')}: {e}")
             continue
 
-    return Conversation.conversations_to_string(
-        conversations, use_transcript=include_transcript, include_timestamps=include_timestamps, people=people
+    return conversations_to_string(
+        conversations,
+        use_transcript=include_transcript,
+        include_timestamps=include_timestamps,
+        people=people,
+        tz=notification_db.get_user_time_zone(uid),
     )
 
 
@@ -137,7 +156,7 @@ def search_conversations_text(
     include_transcript: bool = True,
     include_timestamps: bool = False,
 ) -> str:
-    """Semantic vector search for conversations, formatted as LLM-ready text."""
+    """Hybrid keyword + semantic vector search for conversations, formatted as LLM-ready text."""
     logger.info(f"search_conversations_text - uid: {uid}, query: {query}, limit: {limit}")
 
     # Cap limits
@@ -169,7 +188,13 @@ def search_conversations_text(
         starts_at = 0  # epoch
 
     try:
-        conversation_ids = vector_db.query_vectors(query=query, uid=uid, starts_at=starts_at, ends_at=ends_at, k=limit)
+        # Hybrid search: keyword (Typesense, exact matches on title/overview — catches proper
+        # names that embeddings miss, see #5072) + semantic vector search, keyword hits first.
+        keyword_ids = keyword_search_conversation_ids(
+            uid=uid, query=query, limit=limit, start_date=starts_at, end_date=ends_at
+        )
+        vector_ids = vector_db.query_vectors(query=query, uid=uid, starts_at=starts_at, ends_at=ends_at, k=limit)
+        conversation_ids = merge_conversation_search_ids(keyword_ids, vector_ids)
 
         if not conversation_ids:
             date_info = ""
@@ -191,9 +216,9 @@ def search_conversations_text(
             return f"No conversations found matching query: '{query}'"
 
         # Load people
-        people = []
+        people: List[Person] = []
         if include_transcript:
-            all_person_ids = set()
+            all_person_ids: Set[str] = set()
             for conv_data in conversations_data:
                 segments = conv_data.get('transcript_segments', [])
                 all_person_ids.update([s.get('person_id') for s in segments if s.get('person_id')])
@@ -202,10 +227,10 @@ def search_conversations_text(
                 people = [Person(**p) for p in people_data]
 
         # Convert
-        conversations = []
+        conversations: List[Conversation] = []
         for conv_data in conversations_data:
             try:
-                conversation = Conversation(**conv_data)
+                conversation = deserialize_conversation(conv_data)
                 if (
                     max_transcript_segments != -1
                     and conversation.transcript_segments
@@ -217,9 +242,13 @@ def search_conversations_text(
                 logger.error(f"Error parsing conversation {conv_data.get('id')}: {e}")
                 continue
 
-        result = f"Found {len(conversations)} conversations semantically matching '{query}':\n\n"
-        result += Conversation.conversations_to_string(
-            conversations, use_transcript=include_transcript, include_timestamps=include_timestamps, people=people
+        result = f"Found {len(conversations)} conversations matching '{query}':\n\n"
+        result += conversations_to_string(
+            conversations,
+            use_transcript=include_transcript,
+            include_timestamps=include_timestamps,
+            people=people,
+            tz=notification_db.get_user_time_zone(uid),
         )
         return result
 

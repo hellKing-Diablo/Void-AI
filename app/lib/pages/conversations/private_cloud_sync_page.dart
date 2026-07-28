@@ -18,6 +18,7 @@ class _PrivateCloudSyncPageState extends State<PrivateCloudSyncPage> {
   bool _isSaving = false;
 
   Future<void> _togglePrivateCloudSync(bool value) async {
+    final userProvider = context.read<UserProvider>();
     if (value) {
       final confirmed = await _showEnableDialog();
       if (confirmed != true) return;
@@ -25,24 +26,22 @@ class _PrivateCloudSyncPageState extends State<PrivateCloudSyncPage> {
 
     setState(() => _isSaving = true);
     try {
-      await context.read<UserProvider>().setPrivateCloudSync(value);
+      await userProvider.setPrivateCloudSync(value);
+      if (!mounted) return;
       setState(() => _isSaving = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(value ? context.l10n.cloudStorageEnabled : context.l10n.cloudStorageDisabled),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(value ? context.l10n.cloudStorageEnabled : context.l10n.cloudStorageDisabled),
+          backgroundColor: Colors.green,
+        ),
+      );
     } catch (e) {
       print('Error toggling cloud storage: $e');
+      if (!mounted) return;
       setState(() => _isSaving = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(context.l10n.failedToUpdateSettings(e.toString())), backgroundColor: Colors.red),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.l10n.failedToUpdateSettings(e.toString())), backgroundColor: Colors.red),
+      );
     }
   }
 
@@ -77,7 +76,7 @@ class _PrivateCloudSyncPageState extends State<PrivateCloudSyncPage> {
     );
   }
 
-  Widget _buildFaIcon(IconData icon, {double size = 18, Color color = const Color(0xFF8E8E93)}) {
+  Widget _buildFaIcon(FaIconData icon, {double size = 18, Color color = const Color(0xFF8E8E93)}) {
     return Padding(
       padding: const EdgeInsets.only(left: 2, top: 1),
       child: FaIcon(icon, size: size, color: color),
@@ -139,7 +138,7 @@ class _PrivateCloudSyncPageState extends State<PrivateCloudSyncPage> {
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                                   decoration: BoxDecoration(
-                                    color: isEnabled ? Colors.green.withOpacity(0.2) : const Color(0xFF2A2A2E),
+                                    color: isEnabled ? Colors.green.withValues(alpha: 0.2) : const Color(0xFF2A2A2E),
                                     borderRadius: BorderRadius.circular(100),
                                   ),
                                   child: Text(

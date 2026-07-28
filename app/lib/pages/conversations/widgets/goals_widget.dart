@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -8,7 +9,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:omi/backend/http/api/goals.dart';
 import 'package:omi/providers/goals_provider.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 
 /// Multi-goal widget supporting up to 3 goals with minimalistic UI
@@ -202,7 +202,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
       return;
     }
 
-    MixpanelManager().goalAddButtonTapped(source: 'home');
+    PlatformManager.instance.analytics.goalAddButtonTapped(source: 'home');
     HapticFeedback.lightImpact();
     _titleController.clear();
     _currentController.text = '0';
@@ -264,7 +264,10 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(context.l10n.icon, style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12)),
+                      Text(
+                        context.l10n.icon,
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12),
+                      ),
                       const SizedBox(height: 8),
                       SizedBox(
                         height: 44,
@@ -277,7 +280,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                             return GestureDetector(
                               onTap: () {
                                 HapticFeedback.selectionClick();
-                                MixpanelManager().goalEmojiSelected(emoji: emoji);
+                                PlatformManager.instance.analytics.goalEmojiSelected(emoji: emoji);
                                 setSheetState(() => _selectedEmoji = emoji);
                               },
                               child: Container(
@@ -285,10 +288,12 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                                 height: 44,
                                 margin: const EdgeInsets.only(right: 8),
                                 decoration: BoxDecoration(
-                                  color: isSelected ? Colors.white.withOpacity(0.15) : Colors.white.withOpacity(0.05),
+                                  color: isSelected
+                                      ? Colors.white.withValues(alpha: 0.15)
+                                      : Colors.white.withValues(alpha: 0.05),
                                   borderRadius: BorderRadius.circular(12),
                                   border: isSelected
-                                      ? Border.all(color: Colors.white.withOpacity(0.3), width: 2)
+                                      ? Border.all(color: Colors.white.withValues(alpha: 0.3), width: 2)
                                       : null,
                                 ),
                                 child: Center(child: Text(emoji, style: const TextStyle(fontSize: 22))),
@@ -305,7 +310,10 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(context.l10n.goalTitle, style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12)),
+                    Text(
+                      context.l10n.goalTitle,
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12),
+                    ),
                     const SizedBox(height: 8),
                     TextField(
                       controller: _titleController,
@@ -313,7 +321,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                       style: const TextStyle(color: Colors.white, fontSize: 16),
                       decoration: InputDecoration(
                         filled: true,
-                        fillColor: Colors.white.withOpacity(0.08),
+                        fillColor: Colors.white.withValues(alpha: 0.08),
                         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
@@ -334,7 +342,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                         children: [
                           Text(
                             context.l10n.current,
-                            style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12),
+                            style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12),
                           ),
                           const SizedBox(height: 8),
                           TextField(
@@ -343,7 +351,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                             style: const TextStyle(color: Colors.white, fontSize: 16),
                             decoration: InputDecoration(
                               filled: true,
-                              fillColor: Colors.white.withOpacity(0.08),
+                              fillColor: Colors.white.withValues(alpha: 0.08),
                               contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
@@ -361,7 +369,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                         children: [
                           Text(
                             context.l10n.target,
-                            style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12),
+                            style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12),
                           ),
                           const SizedBox(height: 8),
                           TextField(
@@ -370,7 +378,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                             style: const TextStyle(color: Colors.white, fontSize: 16),
                             decoration: InputDecoration(
                               filled: true,
-                              fillColor: Colors.white.withOpacity(0.08),
+                              fillColor: Colors.white.withValues(alpha: 0.08),
                               contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
@@ -391,7 +399,11 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                       Expanded(
                         child: TextButton(
                           onPressed: () async {
-                            MixpanelManager().goalDeleted(goalId: existingGoal.id, source: 'home', method: 'button');
+                            PlatformManager.instance.analytics.goalDeleted(
+                              goalId: existingGoal.id,
+                              source: 'home',
+                              method: 'button',
+                            );
                             Navigator.pop(context);
                             await _deleteGoal(existingGoal);
                           },
@@ -442,7 +454,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
       // Update existing goal via provider
       await goalsProvider.updateGoal(existingGoal.id, title: title, currentValue: current, targetValue: target);
 
-      MixpanelManager().goalUpdated(goalId: existingGoal.id, source: 'home');
+      PlatformManager.instance.analytics.goalUpdated(goalId: existingGoal.id, source: 'home');
       // Save emoji
       setState(() {
         _goalEmojis[existingGoal.id] = _selectedEmoji;
@@ -458,7 +470,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
       );
 
       if (created != null) {
-        MixpanelManager().goalCreated(
+        PlatformManager.instance.analytics.goalCreated(
           goalId: created.id,
           titleLength: title.length,
           targetValue: target,
@@ -568,12 +580,12 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
         child: const Icon(Icons.delete, color: Colors.white),
       ),
       onDismissed: (direction) async {
-        MixpanelManager().goalDeleted(goalId: goal.id, source: 'home', method: 'swipe');
+        PlatformManager.instance.analytics.goalDeleted(goalId: goal.id, source: 'home', method: 'swipe');
         await _deleteGoal(goal);
       },
       child: GestureDetector(
         onTap: () {
-          MixpanelManager().goalItemTappedForEdit(goalId: goal.id, source: 'home');
+          PlatformManager.instance.analytics.goalItemTappedForEdit(goalId: goal.id, source: 'home');
           _editGoal(goal);
         },
         child: Container(
@@ -588,7 +600,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                 height: 40,
                 margin: const EdgeInsets.only(right: 12),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.1),
+                  color: Colors.white.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Center(child: Text(emoji, style: const TextStyle(fontSize: 18))),
@@ -615,7 +627,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                               data: SliderThemeData(
                                 trackHeight: 6,
                                 activeTrackColor: color,
-                                inactiveTrackColor: Colors.white.withOpacity(0.1),
+                                inactiveTrackColor: Colors.white.withValues(alpha: 0.1),
                                 thumbColor: color,
                                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 0),
                                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
@@ -629,7 +641,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                                 divisions: goal.targetValue >= 1 ? goal.targetValue.toInt() : null,
                                 onChanged: (value) => _updateGoalProgressUI(goal, value),
                                 onChangeEnd: (value) {
-                                  MixpanelManager().goalProgressChanged(
+                                  PlatformManager.instance.analytics.goalProgressChanged(
                                     goalId: goal.id,
                                     oldValue: goal.currentValue,
                                     newValue: value,
@@ -646,7 +658,7 @@ class GoalsWidgetState extends State<GoalsWidget> with WidgetsBindingObserver {
                           '${_rawNum(goal.currentValue)}/${_rawNum(goal.targetValue)}',
                           style: TextStyle(
                             fontSize: 12,
-                            color: Colors.white.withOpacity(0.5),
+                            color: Colors.white.withValues(alpha: 0.5),
                             fontWeight: FontWeight.w500,
                           ),
                         ),

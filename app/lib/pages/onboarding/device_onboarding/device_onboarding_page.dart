@@ -29,7 +29,6 @@ class _DeviceOnboardingPageState extends State<DeviceOnboardingPage> with Single
   late Animation<double> _arrowAnimation;
   late VideoPlayerController _videoController;
   bool _isVideoInitialized = false;
-  double _videoProgress = 0.0;
 
   // Content for each slide
   final List<Map<String, String>> _slideContent = [
@@ -83,30 +82,14 @@ class _DeviceOnboardingPageState extends State<DeviceOnboardingPage> with Single
       });
       _videoController.setLooping(true);
       _videoController.play();
-
-      // Listen to video progress
-      _videoController.addListener(_updateVideoProgress);
     } catch (e) {
       print('Error initializing video: $e');
-    }
-  }
-
-  void _updateVideoProgress() {
-    if (_videoController.value.isInitialized) {
-      final position = _videoController.value.position;
-      final duration = _videoController.value.duration;
-      if (duration.inMilliseconds > 0) {
-        setState(() {
-          _videoProgress = position.inMilliseconds / duration.inMilliseconds;
-        });
-      }
     }
   }
 
   @override
   void dispose() {
     _controller.dispose();
-    _videoController.removeListener(_updateVideoProgress);
     _videoController.dispose();
     super.dispose();
   }
@@ -144,7 +127,7 @@ class _DeviceOnboardingPageState extends State<DeviceOnboardingPage> with Single
                 // Bottom drawer card - wraps content
                 Container(
                   width: double.infinity,
-                  padding: EdgeInsets.fromLTRB(32, 24, 32, 20),
+                  padding: const EdgeInsets.fromLTRB(32, 24, 32, 20),
                   decoration: const BoxDecoration(
                     color: Colors.black,
                     borderRadius: BorderRadius.only(topLeft: Radius.circular(40), topRight: Radius.circular(40)),
@@ -170,7 +153,7 @@ class _DeviceOnboardingPageState extends State<DeviceOnboardingPage> with Single
                         Text(
                           content['subtitle']!,
                           style: TextStyle(
-                            color: Colors.white.withOpacity(0.7),
+                            color: Colors.white.withValues(alpha: 0.7),
                             fontSize: 16,
                             height: 1.4,
                             fontFamily: 'Manrope',

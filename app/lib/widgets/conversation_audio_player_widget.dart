@@ -6,8 +6,60 @@ import 'package:just_audio/just_audio.dart';
 
 import 'package:omi/backend/http/api/audio.dart';
 import 'package:omi/backend/schema/conversation.dart';
+import 'package:omi/utils/audio/audio_timeline_mapper.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/utils/logger.dart';
+
+/// Rounded slider track that shades the collapsed capture gaps of the wall
+/// timeline (fractions of the track width).
+class _GapAwareTrackShape extends RoundedRectSliderTrackShape {
+  final List<(double, double)> gapFractions;
+
+  const _GapAwareTrackShape(this.gapFractions);
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset offset, {
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required Animation<double> enableAnimation,
+    required TextDirection textDirection,
+    required Offset thumbCenter,
+    Offset? secondaryOffset,
+    bool isDiscrete = false,
+    bool isEnabled = false,
+    double additionalActiveTrackHeight = 2,
+  }) {
+    super.paint(
+      context,
+      offset,
+      parentBox: parentBox,
+      sliderTheme: sliderTheme,
+      enableAnimation: enableAnimation,
+      textDirection: textDirection,
+      thumbCenter: thumbCenter,
+      secondaryOffset: secondaryOffset,
+      isDiscrete: isDiscrete,
+      isEnabled: isEnabled,
+      additionalActiveTrackHeight: additionalActiveTrackHeight,
+    );
+    if (gapFractions.isEmpty) return;
+    final trackRect = getPreferredRect(
+      parentBox: parentBox,
+      offset: offset,
+      sliderTheme: sliderTheme,
+      isEnabled: isEnabled,
+      isDiscrete: isDiscrete,
+    );
+    final paint = Paint()..color = Colors.black.withValues(alpha: 0.45);
+    for (final gap in gapFractions) {
+      final left = trackRect.left + gap.$1 * trackRect.width;
+      final right = trackRect.left + gap.$2 * trackRect.width;
+      context.canvas.drawRect(Rect.fromLTRB(left, trackRect.top, right, trackRect.bottom), paint);
+    }
+  }
+}
 
 class ConversationAudioPlayerWidget extends StatefulWidget {
   final ServerConversation conversation;
@@ -29,6 +81,7 @@ class ConversationAudioPlayerWidget extends StatefulWidget {
 
 class _ConversationAudioPlayerWidgetState extends State<ConversationAudioPlayerWidget> {
   final AudioPlayer _audioPlayer = AudioPlayer();
+  bool _disposed = false;
   bool _isLoading = false;
   String? _errorMessage;
   double _playbackSpeed = 1.0;
@@ -39,6 +92,11 @@ class _ConversationAudioPlayerWidgetState extends State<ConversationAudioPlayerW
   Duration _totalDuration = Duration.zero;
   // Cumulative durations for each track (used to calculate combined position)
   List<Duration> _trackStartOffsets = [];
+
+  // Single conversation-level artifact mode (dense MP3 + spans manifest);
+  // positions/seeks are on the wall timeline mapped through the spans.
+  bool _singleArtifact = false;
+  AudioTimelineMapper? _timelineMapper;
 
   StreamSubscription<SequenceState?>? _sequenceSubscription;
   StreamSubscription<Object>? _errorSubscription;
@@ -52,6 +110,7 @@ class _ConversationAudioPlayerWidgetState extends State<ConversationAudioPlayerW
 
   @override
   void dispose() {
+    _disposed = true;
     _sequenceSubscription?.cancel();
     _errorSubscription?.cancel();
     _audioPlayer.dispose();
@@ -60,6 +119,14 @@ class _ConversationAudioPlayerWidgetState extends State<ConversationAudioPlayerW
 
   /// Calculate total duration from audio file metadata
   void _calculateTotalDuration() {
+    final stamp = widget.conversation.conversationAudio;
+    if (stamp != null && stamp.spans.isNotEmpty) {
+      // Dense-artifact timeline: total is the actual captured audio length (the
+      // MP3 has inter-part gaps and lead-in silence collapsed out), so the
+      // slider matches what plays.
+      _totalDuration = Duration(milliseconds: (stamp.capturedDuration * 1000).toInt());
+      return;
+    }
     double totalSeconds = 0;
     _trackStartOffsets = [];
 
@@ -75,10 +142,48 @@ class _ConversationAudioPlayerWidgetState extends State<ConversationAudioPlayerW
 
   /// Get combined position across all tracks
   Duration _getCombinedPosition(int? currentIndex, Duration trackPosition) {
+    if (_singleArtifact) {
+      // Dense MP3 plays linearly; position is raw artifact time (matches the
+      // captured-duration total).
+      return trackPosition;
+    }
     if (currentIndex == null || currentIndex >= _trackStartOffsets.length) {
       return trackPosition;
     }
     return _trackStartOffsets[currentIndex] + trackPosition;
+  }
+
+  Future<AudioSource?> _buildAudioSource() async {
+    // Prefer the conversation-level dense MP3 (signed GCS URL, no auth headers,
+    // exact wall-clock seek via the spans manifest).
+    final urlsResponse = await getConversationAudioSignedUrls(widget.conversation.id);
+    if (_disposed) return null;
+    final conversationAudio = urlsResponse.conversationAudio;
+    if (conversationAudio != null && conversationAudio.isCached && conversationAudio.spans.isNotEmpty) {
+      _timelineMapper = AudioTimelineMapper(conversationAudio.spans);
+      _singleArtifact = true;
+      _totalDuration = Duration(milliseconds: (_timelineMapper!.capturedDuration * 1000).toInt());
+      return AudioSource.uri(Uri.parse(conversationAudio.signedUrl!));
+    }
+
+    // Fallback: per-part WAV streaming playlist through the backend.
+    final headers = await getAudioHeaders();
+    if (_disposed) return null;
+
+    final audioFileIds = widget.conversation.audioFiles.map((af) => af.id).toList();
+    final urls = getConversationAudioUrls(
+      conversationId: widget.conversation.id,
+      audioFileIds: audioFileIds,
+      format: 'wav',
+    );
+
+    // Create concatenating audio source for gapless playback
+    return ConcatenatingAudioSource(
+      useLazyPreparation: true,
+      children: urls.map((url) {
+        return AudioSource.uri(Uri.parse(url), headers: headers);
+      }).toList(),
+    );
   }
 
   Future<void> _setupAudioPlayer() async {
@@ -90,42 +195,34 @@ class _ConversationAudioPlayerWidgetState extends State<ConversationAudioPlayerW
     });
 
     try {
-      final headers = await getAudioHeaders();
-
-      final audioFileIds = widget.conversation.audioFiles.map((af) => af.id).toList();
-      final urls = getConversationAudioUrls(
-        conversationId: widget.conversation.id,
-        audioFileIds: audioFileIds,
-        format: 'wav',
-      );
-
-      // Create concatenating audio source for gapless playback
-      final playlist = ConcatenatingAudioSource(
-        useLazyPreparation: true,
-        children: urls.map((url) {
-          return AudioSource.uri(Uri.parse(url), headers: headers);
-        }).toList(),
-      );
+      final playlist = await _buildAudioSource();
+      if (_disposed || playlist == null) return;
 
       // Listen for playback errors
       _errorSubscription?.cancel();
-      _errorSubscription = _audioPlayer.playbackEventStream
-          .handleError((error) {
-            Logger.debug('Playback error: $error');
-            if (mounted && _retryCount < _maxRetries) {
-              _retryCount++;
-              Future.delayed(const Duration(seconds: 1), () {
-                if (mounted) _setupAudioPlayer();
-              });
-            } else if (mounted) {
-              setState(() {
-                _errorMessage = 'Playback error: ${error.toString()}';
-              });
-            }
-          })
-          .listen((_) {});
+      _errorSubscription = _audioPlayer.playbackEventStream.handleError((error) {
+        Logger.debug('Playback error: $error');
+        if (mounted && _retryCount < _maxRetries) {
+          _retryCount++;
+          Future.delayed(const Duration(seconds: 1), () {
+            if (mounted) _setupAudioPlayer();
+          });
+        } else if (mounted) {
+          setState(() {
+            _errorMessage = 'Playback error: ${error.toString()}';
+          });
+        }
+      }).listen((_) {});
 
-      await _audioPlayer.setAudioSource(playlist, preload: true);
+      if (_disposed) return;
+      try {
+        await _audioPlayer.setAudioSource(playlist, preload: true);
+      } catch (e) {
+        // If disposed mid-flight (proxy server started then player was killed),
+        // swallow the error silently — the widget is already gone.
+        if (_disposed) return;
+        rethrow;
+      }
 
       _retryCount = 0;
 
@@ -178,6 +275,12 @@ class _ConversationAudioPlayerWidgetState extends State<ConversationAudioPlayerW
 
   /// Seek to a combined position across all tracks
   Future<void> _seekToCombinedPosition(Duration targetPosition) async {
+    if (_singleArtifact) {
+      // targetPosition is already artifact time (the slider runs on the dense MP3).
+      await _audioPlayer.seek(targetPosition);
+      return;
+    }
+
     // Find which track this position falls into
     int targetIndex = 0;
     Duration positionInTrack = targetPosition;
@@ -241,7 +344,7 @@ class _ConversationAudioPlayerWidgetState extends State<ConversationAudioPlayerW
           children: [
             const Icon(Icons.error_outline, color: Colors.red, size: 32),
             const SizedBox(height: 8),
-            const Text('Error loading audio', style: TextStyle(color: Colors.red)),
+            Text(context.l10n.errorLoadingAudio, style: const TextStyle(color: Colors.red)),
             const SizedBox(height: 4),
             Text(
               _errorMessage!,
@@ -292,12 +395,14 @@ class _ConversationAudioPlayerWidgetState extends State<ConversationAudioPlayerW
                                 trackHeight: 4,
                                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
                                 overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                                // Dense MP3 has no gaps on its timeline — plain track.
+                                trackShape: const _GapAwareTrackShape([]),
                               ),
                               child: Slider(
                                 value: combinedPosition.inMilliseconds.toDouble().clamp(
-                                  0,
-                                  _totalDuration.inMilliseconds.toDouble(),
-                                ),
+                                      0,
+                                      _totalDuration.inMilliseconds.toDouble(),
+                                    ),
                                 max: _totalDuration.inMilliseconds.toDouble().clamp(1.0, double.infinity),
                                 activeColor: Colors.deepPurpleAccent,
                                 inactiveColor: Colors.grey.shade700,

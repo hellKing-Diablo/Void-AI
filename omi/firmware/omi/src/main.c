@@ -82,6 +82,8 @@ static void mic_handler(int16_t *buffer)
     monitor_inc_mic_buffer();
 #endif
 
+    // Hardware AAD (T5838) is handled inside mic.c; the mic callback only
+    // forwards audio to the codec here.
     int err = codec_receive_pcm(buffer, MIC_BUFFER_SAMPLES);
     if (err) {
         LOG_ERR("Failed to process PCM data: %d", err);
@@ -343,6 +345,8 @@ int main(void)
         error_microphone();
         return ret;
     }
+    // Hardware AAD (T5838) is started inside mic_start().
+
     LOG_INF("Device initialized successfully\n");
 
     while (1) {

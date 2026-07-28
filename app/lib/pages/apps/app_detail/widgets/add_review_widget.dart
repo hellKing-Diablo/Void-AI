@@ -1,3 +1,4 @@
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flutter_rating_bar/flutter_rating_bar.dart';
@@ -7,7 +8,6 @@ import 'package:omi/backend/http/api/apps.dart';
 import 'package:omi/backend/preferences.dart';
 import 'package:omi/backend/schema/app.dart';
 import 'package:omi/providers/connectivity_provider.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/utils/logger.dart';
 import 'package:omi/widgets/animated_loading_button.dart';
@@ -74,6 +74,12 @@ class _AddReviewWidgetState extends State<AddReviewWidget> {
   }
 
   @override
+  void dispose() {
+    reviewController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
@@ -114,7 +120,7 @@ class _AddReviewWidgetState extends State<AddReviewWidget> {
                   final screenWidth = MediaQuery.sizeOf(context).width;
                   final itemSize = MediaQuery.sizeOf(context).width < 400 ? 28.0 : 34.0;
                   final containerPadding = screenWidth * 0.1; // 5% on each side
-                  final cardPadding = 16.0 * 2; // Container padding
+                  const cardPadding = 16.0 * 2; // Container padding
                   final availableWidth =
                       screenWidth - containerPadding - cardPadding - 8.0; // Minus Padding widget padding
                   final totalStarWidth = itemSize * 5;
@@ -139,10 +145,10 @@ class _AddReviewWidgetState extends State<AddReviewWidget> {
               duration: const Duration(milliseconds: 300),
               height: showReviewField
                   ? (showButton
-                        ? (MediaQuery.sizeOf(context).height < 680
-                              ? MediaQuery.sizeOf(context).height * 0.28
-                              : MediaQuery.sizeOf(context).height * 0.2)
-                        : MediaQuery.sizeOf(context).height * 0.132)
+                      ? (MediaQuery.sizeOf(context).height < 680
+                          ? MediaQuery.sizeOf(context).height * 0.28
+                          : MediaQuery.sizeOf(context).height * 0.2)
+                      : MediaQuery.sizeOf(context).height * 0.132)
                   : 0,
               child: !showReviewField
                   ? null
@@ -228,9 +234,11 @@ class _AddReviewWidgetState extends State<AddReviewWidget> {
                                       }
                                       if (isSuccessful) {
                                         updateShowButton(false);
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(SnackBar(content: Text(context.l10n.reviewAddedSuccessfully)));
+                                        if (context.mounted) {
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(SnackBar(content: Text(context.l10n.reviewAddedSuccessfully)));
+                                        }
                                         bool hadReview = widget.app.userReview != null;
                                         if (!hadReview) widget.app.ratingCount += 1;
                                         widget.app.userReview = AppReview(
@@ -243,10 +251,10 @@ class _AddReviewWidgetState extends State<AddReviewWidget> {
                                         var index = appsList.indexWhere((element) => element.id == widget.app.id);
                                         appsList[index] = widget.app;
                                         SharedPreferencesUtil().appsList = appsList;
-                                        MixpanelManager().appRated(widget.app.id.toString(), rating);
+                                        PlatformManager.instance.analytics.appRated(widget.app.id.toString(), rating);
 
                                         // Track review added
-                                        MixpanelManager().appDetailReviewAdded(
+                                        PlatformManager.instance.analytics.appDetailReviewAdded(
                                           appId: widget.app.id,
                                           rating: rating.toInt(),
                                           hasComment: reviewController.text.trim().isNotEmpty,
@@ -254,7 +262,7 @@ class _AddReviewWidgetState extends State<AddReviewWidget> {
 
                                         Logger.debug('Refreshed apps list.');
                                         setState(() {});
-                                      } else {
+                                      } else if (context.mounted) {
                                         ScaffoldMessenger.of(
                                           context,
                                         ).showSnackBar(SnackBar(content: Text(context.l10n.failedToSubmitReview)));

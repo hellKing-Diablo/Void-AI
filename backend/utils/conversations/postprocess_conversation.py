@@ -1,16 +1,22 @@
 import asyncio
 import os
-import threading
 import time
+from typing import List
+
+from utils.executors import storage_executor
 
 from pydub import AudioSegment
 
 import database.conversations as conversations_db
 from database.users import get_user_store_recording_permission
-from models.conversation import *
+from models.conversation import Conversation
+from models.conversation_enums import PostProcessingStatus
+from utils.conversations.factory import deserialize_conversation
+from utils.conversations import lifecycle as lifecycle_service
+from models.transcript_segment import TranscriptSegment
 from utils.conversations.process_conversation import process_conversation, process_user_emotion
 from utils.other.storage import upload_postprocessing_audio, delete_postprocessing_audio, upload_conversation_recording
-from utils.stt.pre_recorded import deepgram_prerecorded, postprocess_words
+from utils.stt.pre_recorded import postprocess_words, prerecorded
 from utils.stt.speech_profile import get_speech_profile_matching_predictions
 from utils.stt.vad import vad_is_empty
 import logging
@@ -27,7 +33,7 @@ def postprocess_conversation(
     if not conversation_data:
         return 404, "Conversation not found"
 
-    conversation = Conversation(**conversation_data)
+    conversation = deserialize_conversation(conversation_data)
     if conversation.discarded:
         logger.info('postprocess_conversation: Conversation is discarded')
         return 400, "Conversation is discarded"
@@ -68,13 +74,13 @@ def postprocess_conversation(
     try:
         aseg = AudioSegment.from_wav(file_path)
         signed_url = upload_postprocessing_audio(file_path)
-        threading.Thread(target=_delete_postprocessing_audio, args=(file_path,)).start()
+        storage_executor.submit(_delete_postprocessing_audio, file_path)
 
         if aseg.frame_rate == 16000 and get_user_store_recording_permission(uid):
             upload_conversation_recording(file_path, uid, conversation_id)
 
         speakers_count = len(set([segment.speaker for segment in conversation.transcript_segments]))
-        words = deepgram_prerecorded(signed_url, speakers_count=speakers_count)
+        words = prerecorded(signed_url, speakers_count=speakers_count)
         fal_segments = postprocess_words(words, aseg.duration_seconds)
 
         # if new transcript is 90% shorter than the original, cancel post-processing, smth wrong with audio or FAL
@@ -98,8 +104,8 @@ def postprocess_conversation(
         if not fal_failed:
             conversation.transcript_segments = fal_segments
 
-        conversations_db.upsert_conversation(
-            uid, conversation.dict()
+        lifecycle_service.persist_processed_conversation(
+            uid, conversation.model_dump()
         )  # Store transcript segments at least if smth fails later
         if fal_failed:
             # TODO: FAL fails too much and is fucking expensive. Remove it.
@@ -157,7 +163,7 @@ async def _process_user_emotion(uid: str, language_code: str, conversation: Conv
 
 def _handle_segment_embedding_matching(uid: str, file_path: str, segments: List[TranscriptSegment], aseg: AudioSegment):
     if aseg.frame_rate == 16000:
-        matches = get_speech_profile_matching_predictions(uid, file_path, [s.dict() for s in segments])
+        matches = get_speech_profile_matching_predictions(uid, file_path, [s.model_dump() for s in segments])
         for i, segment in enumerate(segments):
             segment.is_user = matches[i]['is_user']
             segment.person_id = matches[i].get('person_id')

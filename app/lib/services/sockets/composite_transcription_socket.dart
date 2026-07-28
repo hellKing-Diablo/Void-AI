@@ -1,11 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/material.dart';
-
 import 'package:omi/services/custom_stt_log_service.dart';
 import 'package:omi/services/sockets/pure_socket.dart';
 import 'package:omi/utils/debug_log_manager.dart';
+import 'package:omi/utils/hard_secret_detector.dart';
 import 'package:omi/utils/logger.dart';
 
 class CompositeTranscriptionSocket implements IPureSocket {
@@ -90,9 +89,13 @@ class CompositeTranscriptionSocket implements IPureSocket {
     CustomSttLogService.instance.info('Composite', 'Disconnecting...');
     DebugLogManager.logEvent('composite_socket_disconnecting', {});
 
+    // Mark disconnected before touching the children: their disconnect()
+    // fires onClosed, which would otherwise hit _onSocketClosed while the
+    // composite still looks connected and trigger a spurious
+    // "socket closed unexpectedly" teardown on top of this intentional one.
+    _status = PureSocketStatus.disconnected;
     await _disconnectBothQuietly();
 
-    _status = PureSocketStatus.disconnected;
     onClosed();
   }
 
@@ -101,9 +104,9 @@ class CompositeTranscriptionSocket implements IPureSocket {
     CustomSttLogService.instance.info('Composite', 'Stopping...');
     DebugLogManager.logEvent('composite_socket_stopping', {});
 
-    await Future.wait([primarySocket.stop(), secondarySocket.stop()]);
-
+    // Same ordering requirement as disconnect().
     _status = PureSocketStatus.disconnected;
+    await Future.wait([primarySocket.stop(), secondarySocket.stop()]);
   }
 
   /// Called when either socket closes unexpectedly
@@ -157,6 +160,23 @@ class CompositeTranscriptionSocket implements IPureSocket {
 
     try {
       dynamic segments = message is String ? jsonDecode(message) : message;
+      if (segments is List) {
+        final filterResult = _dropSecretSegments(segments);
+        segments = filterResult.segments;
+        if (filterResult.droppedCount > 0) {
+          unawaited(
+            DebugLogManager.logEvent('hard_secret_artifact_dropped', {
+              'source': 'custom_stt_primary',
+              'artifact_type': 'transcript_segment',
+              'dropped_count': filterResult.droppedCount,
+              'categories': filterResult.categories,
+            }),
+          );
+        }
+        if (segments.isEmpty) {
+          return;
+        }
+      }
 
       final payload = <String, dynamic>{'type': suggestedTranscriptType, 'segments': segments};
 
@@ -192,6 +212,23 @@ class CompositeTranscriptionSocket implements IPureSocket {
   @override
   void onError(Object err, StackTrace trace) {
     _listener?.onError(err, trace);
+  }
+
+  ({List<dynamic> segments, int droppedCount, List<String> categories}) _dropSecretSegments(List<dynamic> segments) {
+    final kept = <dynamic>[];
+    final categories = <String>{};
+    var droppedCount = 0;
+    for (final segment in segments) {
+      final text = segment is Map ? segment['text']?.toString() : null;
+      if (text != null && HardSecretDetector.contains(text)) {
+        categories.addAll(HardSecretDetector.categories(text));
+        droppedCount += 1;
+        continue;
+      }
+      kept.add(segment);
+    }
+    final sortedCategories = categories.toList()..sort();
+    return (segments: kept, droppedCount: droppedCount, categories: sortedCategories);
   }
 }
 

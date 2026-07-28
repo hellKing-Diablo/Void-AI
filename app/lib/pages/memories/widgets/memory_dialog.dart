@@ -1,8 +1,8 @@
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 
 import 'package:omi/backend/schema/memory.dart';
 import 'package:omi/providers/memories_provider.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/utils/logger.dart';
 import 'delete_confirmation.dart';
@@ -57,7 +57,7 @@ class _MemoryDialogState extends State<MemoryDialog> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.1),
+                    color: Colors.white.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Row(
@@ -68,10 +68,10 @@ class _MemoryDialogState extends State<MemoryDialog> {
                       Text(
                         isEditing
                             ? (widget.memory!.category == MemoryCategory.manual
-                                  ? context.l10n.filterManual
-                                  : widget.memory!.category == MemoryCategory.interesting
-                                  ? context.l10n.filterInteresting
-                                  : context.l10n.filterSystem)
+                                ? context.l10n.filterManual
+                                : widget.memory!.category == MemoryCategory.interesting
+                                    ? context.l10n.filterInteresting
+                                    : context.l10n.filterSystem)
                             : context.l10n.newMemory,
                         style: const TextStyle(color: Colors.white, fontSize: 14),
                       ),
@@ -95,6 +95,7 @@ class _MemoryDialogState extends State<MemoryDialog> {
               constraints: const BoxConstraints(maxHeight: 250),
               child: SingleChildScrollView(
                 child: TextField(
+                  key: const ValueKey('memory_content_field'),
                   controller: contentController,
                   autofocus: true,
                   maxLines: null,
@@ -124,14 +125,15 @@ class _MemoryDialogState extends State<MemoryDialog> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
+                key: const ValueKey('memory_save_button'),
                 onPressed: _isSaving ? null : _handleSave,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _saveFailed ? Colors.orange : Colors.deepPurpleAccent,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  disabledBackgroundColor: Colors.deepPurpleAccent.withOpacity(0.5),
-                  disabledForegroundColor: Colors.white.withOpacity(0.7),
+                  disabledBackgroundColor: Colors.deepPurpleAccent.withValues(alpha: 0.5),
+                  disabledForegroundColor: Colors.white.withValues(alpha: 0.7),
                 ),
                 child: _isSaving
                     ? const SizedBox(
@@ -169,7 +171,7 @@ class _MemoryDialogState extends State<MemoryDialog> {
       if (isEditing) {
         success = await widget.provider.editMemory(widget.memory!, contentController.text);
         if (success) {
-          MixpanelManager().memoriesPageEditedMemory();
+          PlatformManager.instance.analytics.memoriesPageEditedMemory();
         }
       } else {
         success = await widget.provider.createMemory(
@@ -178,7 +180,7 @@ class _MemoryDialogState extends State<MemoryDialog> {
           MemoryCategory.manual,
         );
         if (success) {
-          MixpanelManager().memoriesPageCreatedMemory(MemoryCategory.manual);
+          PlatformManager.instance.analytics.memoriesPageCreatedMemory(MemoryCategory.manual);
         }
       }
     } catch (e) {
@@ -204,7 +206,9 @@ class _MemoryDialogState extends State<MemoryDialog> {
     final shouldDelete = await DeleteConfirmation.show(context);
     if (shouldDelete) {
       widget.provider.deleteMemory(widget.memory!);
-      Navigator.pop(context);
+      if (context.mounted) {
+        Navigator.pop(context);
+      }
     }
   }
 }

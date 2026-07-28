@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -72,7 +72,7 @@ jobs:
 
       - name: Create Pull Request
         id: create_pr
-        uses: peter-evans/create-pull-request@v5
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "chore: sync docs to README files"
@@ -84,10 +84,17 @@ jobs:
           committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
           author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
 
+      - name: Generate Omi Bot token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.OMI_BOT_APP_ID }}
+          private-key: ${{ secrets.OMI_BOT_PRIVATE_KEY }}
+
       - name: Auto-merge PR
         if: steps.create_pr.outputs.pull-request-operation == 'created'
         run: |
           gh pr merge --squash --delete-branch --admin "$PR_URL"
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_URL: ${{ steps.create_pr.outputs.pull-request-url }}

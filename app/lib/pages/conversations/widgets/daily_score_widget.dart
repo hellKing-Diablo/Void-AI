@@ -1,12 +1,12 @@
 import 'dart:math' as math;
 
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:provider/provider.dart';
 
 import 'package:omi/pages/action_items/widgets/action_item_form_sheet.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/pages/conversations/widgets/goals_widget.dart';
 import 'package:omi/providers/action_items_provider.dart';
 import 'package:omi/providers/goals_provider.dart';
@@ -99,13 +99,13 @@ class DailyScoreWidgetState extends State<DailyScoreWidget> {
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                             letterSpacing: 1.2,
-                            color: Colors.white.withOpacity(0.5),
+                            color: Colors.white.withValues(alpha: 0.5),
                           ),
                         ),
                         const SizedBox(height: 6),
                         Text(
                           context.l10n.dailyScoreDescription,
-                          style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.5), height: 1.4),
+                          style: TextStyle(fontSize: 13, color: Colors.white.withValues(alpha: 0.5), height: 1.4),
                         ),
                         const SizedBox(height: 14),
                         // "Add Goals" or "New Task" button
@@ -113,7 +113,9 @@ class DailyScoreWidgetState extends State<DailyScoreWidget> {
                           GestureDetector(
                             onTap: () {
                               HapticFeedback.lightImpact();
-                              MixpanelManager().dailyScoreCtaTapped(ctaType: goals.isEmpty ? 'add_goal' : 'new_task');
+                              PlatformManager.instance.analytics.dailyScoreCtaTapped(
+                                ctaType: goals.isEmpty ? 'add_goal' : 'new_task',
+                              );
                               if (goals.isEmpty) {
                                 _addGoal();
                               } else {
@@ -123,7 +125,7 @@ class DailyScoreWidgetState extends State<DailyScoreWidget> {
                             child: Container(
                               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                               decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.1),
+                                color: Colors.white.withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.circular(20),
                               ),
                               child: Row(
@@ -134,14 +136,14 @@ class DailyScoreWidgetState extends State<DailyScoreWidget> {
                                     style: TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w500,
-                                      color: Colors.white.withOpacity(0.8),
+                                      color: Colors.white.withValues(alpha: 0.8),
                                     ),
                                   ),
                                   const SizedBox(width: 4),
                                   Icon(
                                     goals.isEmpty ? Icons.chevron_right : Icons.add,
                                     size: 16,
-                                    color: Colors.white.withOpacity(0.5),
+                                    color: Colors.white.withValues(alpha: 0.5),
                                   ),
                                 ],
                               ),
@@ -186,12 +188,12 @@ class DailyScoreWidgetState extends State<DailyScoreWidget> {
                   child: GestureDetector(
                     onTap: () {
                       HapticFeedback.lightImpact();
-                      MixpanelManager().dailyScoreHelpTapped();
+                      PlatformManager.instance.analytics.dailyScoreHelpTapped();
                       _showScoreDetails(context, score, completedTasks, totalTasks);
                     },
                     child: Container(
                       padding: const EdgeInsets.all(2),
-                      child: Icon(Icons.help_outline, size: 16, color: Colors.white.withOpacity(0.3)),
+                      child: Icon(Icons.help_outline, size: 16, color: Colors.white.withValues(alpha: 0.3)),
                     ),
                   ),
                 ),
@@ -259,7 +261,7 @@ class DailyScoreWidgetState extends State<DailyScoreWidget> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.05),
+                  color: Colors.white.withValues(alpha: 0.05),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Column(
@@ -267,12 +269,16 @@ class DailyScoreWidgetState extends State<DailyScoreWidget> {
                   children: [
                     Text(
                       context.l10n.howItWorks,
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.8)),
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white.withValues(alpha: 0.8),
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       context.l10n.dailyScoreExplanation,
-                      style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.5), height: 1.4),
+                      style: TextStyle(fontSize: 13, color: Colors.white.withValues(alpha: 0.5), height: 1.4),
                     ),
                   ],
                 ),
@@ -296,7 +302,7 @@ class DailyScoreWidgetState extends State<DailyScoreWidget> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label, style: TextStyle(fontSize: 14, color: Colors.white.withOpacity(0.5))),
+        Text(label, style: TextStyle(fontSize: 14, color: Colors.white.withValues(alpha: 0.5))),
         Text(
           value,
           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: valueColor),
@@ -320,7 +326,7 @@ class _SemicircleGaugePainter extends CustomPainter {
 
     // Background arc (semicircle)
     final bgPaint = Paint()
-      ..color = Colors.white.withOpacity(0.12)
+      ..color = Colors.white.withValues(alpha: 0.12)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 6
       ..strokeCap = StrokeCap.round;

@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import type { OmiApp } from '@/lib/services/omi-api/types';
+import { useAuthFetch } from '@/hooks/useAuthToken';
 import { Loader2, Save, UploadCloud } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -18,6 +19,7 @@ interface EditAppDrawerProps {
 }
 
 export function EditAppDrawer({ open, onClose, app, onSaved }: EditAppDrawerProps) {
+  const { fetchWithAuth } = useAuthFetch();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [imageUrl, setImageUrl] = useState('');
@@ -73,7 +75,7 @@ export function EditAppDrawer({ open, onClose, app, onSaved }: EditAppDrawerProp
     try {
       const form = new FormData();
       form.append('app_id', app.id);
-      form.append('uid', app.uid);
+      form.append('uid', app.uid ?? '');
       if (name) form.append('name', name);
       if (description) form.append('description', description);
       if (hasMemories && memoryPrompt) form.append('memory_prompt', memoryPrompt);
@@ -89,7 +91,7 @@ export function EditAppDrawer({ open, onClose, app, onSaved }: EditAppDrawerProp
         form.append('image_url', imageUrl);
       }
 
-      const res = await fetch(`/api/omi/apps/${app.id}/update`, {
+      const res = await fetchWithAuth(`/api/omi/apps/${app.id}/update`, {
         method: 'POST',
         body: form,
       });

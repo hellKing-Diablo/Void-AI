@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -7,17 +8,16 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:provider/provider.dart';
 
 import 'package:omi/backend/http/api/action_items.dart';
-import 'package:omi/backend/preferences.dart';
 import 'package:omi/backend/schema/schema.dart';
 import 'package:omi/pages/settings/task_integrations_page.dart';
 import 'package:omi/pages/settings/usage_page.dart';
 import 'package:omi/providers/task_integration_provider.dart';
-import 'package:omi/services/apple_reminders_service.dart';
-import 'package:omi/services/asana_service.dart';
-import 'package:omi/services/clickup_service.dart';
-import 'package:omi/services/google_tasks_service.dart';
-import 'package:omi/services/todoist_service.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
+import 'package:omi/providers/usage_provider.dart';
+import 'package:omi/services/integrations/apple_reminders_service.dart';
+import 'package:omi/services/integrations/asana_service.dart';
+import 'package:omi/services/integrations/clickup_service.dart';
+import 'package:omi/services/integrations/google_tasks_service.dart';
+import 'package:omi/services/integrations/todoist_service.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/utils/other/temp.dart';
 import 'package:omi/utils/platform/platform_service.dart';
@@ -65,7 +65,7 @@ class _ActionItemTileWidgetState extends State<ActionItemTileWidget> {
     final newState = !widget.actionItem.completed;
 
     // Track action item checked/unchecked
-    MixpanelManager().actionItemChecked(
+    PlatformManager.instance.analytics.actionItemChecked(
       actionItemId: widget.actionItem.id,
       completed: newState,
       timestamp: DateTime.now(),
@@ -114,31 +114,31 @@ class _ActionItemTileWidgetState extends State<ActionItemTileWidget> {
 
     // For snoozed tab, always show actual date/time instead of relative labels
     if (widget.isSnoozedTab) {
-      chipColor = Colors.grey.withOpacity(0.2);
+      chipColor = Colors.grey.withValues(alpha: 0.2);
       textColor = Colors.grey.shade400;
       dueDateText = _formatDueDate(context, dueDate, showFullDate: true);
     } else if (widget.actionItem.completed) {
-      chipColor = Colors.grey.withOpacity(0.2);
+      chipColor = Colors.grey.withValues(alpha: 0.2);
       textColor = Colors.grey.shade500;
       dueDateText = _formatDueDate(context, dueDate);
     } else if (isOverdue) {
-      chipColor = Colors.red.withOpacity(0.15);
+      chipColor = Colors.red.withValues(alpha: 0.15);
       textColor = Colors.red.shade300;
       dueDateText = _formatDueDate(context, dueDate);
     } else if (isToday) {
-      chipColor = Colors.yellow.withOpacity(0.15);
+      chipColor = Colors.yellow.withValues(alpha: 0.15);
       textColor = Colors.yellow.shade300;
       dueDateText = context.l10n.today;
     } else if (isTomorrow) {
-      chipColor = Colors.blue.withOpacity(0.15);
+      chipColor = Colors.blue.withValues(alpha: 0.15);
       textColor = Colors.blue.shade300;
       dueDateText = context.l10n.tomorrow;
     } else if (isThisWeek) {
-      chipColor = Colors.green.withOpacity(0.15);
+      chipColor = Colors.green.withValues(alpha: 0.15);
       textColor = Colors.green.shade300;
       dueDateText = _formatDueDate(context, dueDate);
     } else {
-      chipColor = Colors.purple.withOpacity(0.15);
+      chipColor = Colors.purple.withValues(alpha: 0.15);
       textColor = Colors.purple.shade300;
       dueDateText = _formatDueDate(context, dueDate);
     }
@@ -271,9 +271,9 @@ class _ActionItemTileWidgetState extends State<ActionItemTileWidget> {
                     height: 24,
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(6),
-                      color: displayApp.iconColor.withOpacity(0.2),
+                      color: displayApp.iconColor.withValues(alpha: 0.2),
                     ),
-                    child: Icon(displayApp.icon, color: displayApp.iconColor, size: 16),
+                    child: FaIcon(displayApp.icon, color: displayApp.iconColor, size: 16),
                   ),
             // Status indicator at bottom right
             Positioned(
@@ -428,7 +428,7 @@ class _ActionItemTileWidgetState extends State<ActionItemTileWidget> {
         await updateActionItem(widget.actionItem.id, exported: true, exportDate: exportTime, exportPlatform: 'todoist');
 
         // Track action item export
-        MixpanelManager().actionItemExported(
+        PlatformManager.instance.analytics.actionItemExported(
           actionItemId: widget.actionItem.id,
           appName: 'Todoist',
           timestamp: exportTime,
@@ -540,7 +540,7 @@ class _ActionItemTileWidgetState extends State<ActionItemTileWidget> {
         await updateActionItem(widget.actionItem.id, exported: true, exportDate: exportTime, exportPlatform: 'asana');
 
         // Track action item export
-        MixpanelManager().actionItemExported(
+        PlatformManager.instance.analytics.actionItemExported(
           actionItemId: widget.actionItem.id,
           appName: 'Asana',
           timestamp: exportTime,
@@ -661,7 +661,7 @@ class _ActionItemTileWidgetState extends State<ActionItemTileWidget> {
         );
 
         // Track action item export
-        MixpanelManager().actionItemExported(
+        PlatformManager.instance.analytics.actionItemExported(
           actionItemId: widget.actionItem.id,
           appName: 'Google Tasks',
           timestamp: exportTime,
@@ -753,7 +753,7 @@ class _ActionItemTileWidgetState extends State<ActionItemTileWidget> {
         await updateActionItem(widget.actionItem.id, exported: true, exportDate: exportTime, exportPlatform: 'clickup');
 
         // Track action item export
-        MixpanelManager().actionItemExported(
+        PlatformManager.instance.analytics.actionItemExported(
           actionItemId: widget.actionItem.id,
           appName: 'ClickUp',
           timestamp: exportTime,
@@ -847,7 +847,6 @@ class _ActionItemTileWidgetState extends State<ActionItemTileWidget> {
       title: widget.actionItem.description,
       notes: 'From Omi',
       dueDate: widget.actionItem.dueAt,
-      listName: 'Reminders',
     );
 
     final success = calendarItemId != null;
@@ -887,7 +886,7 @@ class _ActionItemTileWidgetState extends State<ActionItemTileWidget> {
         );
 
         // Track action item export
-        MixpanelManager().actionItemExported(
+        PlatformManager.instance.analytics.actionItemExported(
           actionItemId: widget.actionItem.id,
           appName: 'Apple Reminders',
           timestamp: exportTime,
@@ -906,7 +905,7 @@ class _ActionItemTileWidgetState extends State<ActionItemTileWidget> {
       color: Colors.transparent,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: Colors.transparent, width: 0),
+        side: const BorderSide(color: Colors.transparent, width: 0),
       ),
       clipBehavior: Clip.hardEdge,
       child: InkWell(
@@ -1011,7 +1010,8 @@ class _ActionItemTileWidgetState extends State<ActionItemTileWidget> {
                     filter: ImageFilter.blur(sigmaX: 2.0, sigmaY: 2.0),
                     child: GestureDetector(
                       onTap: () {
-                        MixpanelManager().paywallOpened('Action Item');
+                        if (!context.read<UsageProvider>().showSubscriptionUI) return;
+                        PlatformManager.instance.analytics.paywallOpened('Action Item');
                         routeToPage(context, const UsagePage(showUpgradeDialog: true));
                         return;
                       },
@@ -1021,10 +1021,12 @@ class _ActionItemTileWidgetState extends State<ActionItemTileWidget> {
                           color: Colors.black.withValues(alpha: 0.01),
                           borderRadius: const BorderRadius.all(Radius.circular(8)),
                         ),
-                        child: Text(
-                          context.l10n.upgradeToUnlimited,
-                          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                        ),
+                        child: context.watch<UsageProvider>().showSubscriptionUI
+                            ? Text(
+                                context.l10n.upgradeToUnlimited,
+                                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                              )
+                            : const SizedBox.shrink(),
                       ),
                     ),
                   ),

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -15,7 +16,6 @@ import 'package:omi/pages/conversation_detail/widgets/name_speaker_sheet.dart';
 import 'package:omi/providers/capture_provider.dart';
 import 'package:omi/providers/connectivity_provider.dart';
 import 'package:omi/providers/device_provider.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/enums.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/services/wals/wal.dart';
@@ -63,7 +63,7 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
       } else {
         // Phone mic
         await provider.streamRecording();
-        MixpanelManager().phoneMicRecordingStarted();
+        PlatformManager.instance.analytics.phoneMicRecordingStarted();
       }
     } else {
       // Mute - pause recording with interesting haptic
@@ -80,7 +80,7 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
       } else {
         // Phone mic
         await provider.stopStreamRecording();
-        MixpanelManager().phoneMicRecordingStopped();
+        PlatformManager.instance.analytics.phoneMicRecordingStopped();
       }
     }
   }
@@ -124,7 +124,9 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
 
       if (!showSummarizeConfirmation) {
         await stopRecordingAndProcess();
-        Navigator.of(context).pop();
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
         return;
       }
       showDialog(
@@ -157,8 +159,10 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
                 onConfirm: () async {
                   SharedPreferencesUtil().showSummarizeConfirmation = showSummarizeConfirmation;
                   await stopRecordingAndProcess();
-                  Navigator.of(context).pop();
-                  Navigator.of(context).pop();
+                  if (context.mounted) {
+                    Navigator.of(context).pop();
+                    Navigator.of(context).pop();
+                  }
                 },
               );
             },
@@ -172,6 +176,7 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
   Widget build(BuildContext context) {
     return Consumer2<CaptureProvider, DeviceProvider>(
       builder: (context, provider, deviceProvider, child) {
+        final effectivelyMuted = _isMuted || provider.isCallActive;
         return PopScope(
           canPop: true,
           child: Scaffold(
@@ -196,22 +201,16 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
                   Text(
                     provider.photos.isNotEmpty
                         ? "📸"
-                        : _isMuted
+                        : effectivelyMuted
                             ? "🔇"
-                            : provider.transcriptServiceReady
-                                ? "🎙️"
-                                : "🎙️⚡",
+                            : "🎙️",
                   ),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
                       provider.photos.isNotEmpty
                           ? 'Capturing'
-                          : (_isMuted
-                              ? context.l10n.muted
-                              : provider.transcriptServiceReady
-                                  ? context.l10n.listening
-                                  : context.l10n.transcriptionPaused),
+                          : (effectivelyMuted ? context.l10n.muted : context.l10n.listening),
                     ),
                   ),
                 ],
@@ -229,6 +228,7 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
                         // Transcripts, photos + inline WAL safety indicator
                         Column(
                           children: [
+                            _buildUnsyncedWalIndicator(provider.unsyncedSessionWals, provider.inFlightAudioSeconds),
                             Expanded(
                               child: provider.segments.isEmpty && provider.photos.isEmpty
                                   ? Center(
@@ -296,7 +296,6 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
                                           },
                                         ),
                             ),
-                            _buildUnsyncedWalIndicator(provider.unsyncedSessionWals),
                           ],
                         ),
                         // Summary Tab
@@ -364,7 +363,7 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
                           width: 52,
                           height: 52,
                           decoration: BoxDecoration(
-                            color: _isMuted ? Colors.red : const Color(0xFF35343B),
+                            color: effectivelyMuted ? Colors.red : const Color(0xFF35343B),
                             shape: BoxShape.circle,
                             boxShadow: [
                               BoxShadow(
@@ -442,14 +441,14 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           // Camera icon avatar
-          Column(
+          const Column(
             children: [
-              const CircleAvatar(
+              CircleAvatar(
                 radius: 16,
                 backgroundColor: Color(0xFF2A5D3E),
                 child: Icon(Icons.camera_alt, size: 16, color: Colors.white70),
               ),
-              const SizedBox(height: 2),
+              SizedBox(height: 2),
             ],
           ),
           const SizedBox(width: 8),
@@ -667,36 +666,47 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
     );
   }
 
-  Widget _buildUnsyncedWalIndicator(List<Wal> unsyncedWals) {
-    if (unsyncedWals.isEmpty) return const SizedBox.shrink();
-    final totalSeconds = unsyncedWals.fold<int>(0, (sum, w) => sum + w.seconds);
-    final label = totalSeconds >= 60 ? '${totalSeconds ~/ 60}m ${totalSeconds % 60}s' : '${totalSeconds}s';
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 6),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1C1C24),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFF3A3A4A), width: 0.5),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.lock_outline, size: 14, color: Color(0xFF8B8B9E)),
-            const SizedBox(width: 6),
-            Text(
-              context.l10n.audioSavedLocally(label),
-              style: const TextStyle(color: Color(0xFF8B8B9E), fontSize: 12, height: 1.3),
-            ),
-            const SizedBox(width: 6),
-            const Text('·', style: TextStyle(color: Color(0xFF8B8B9E), fontSize: 12)),
-            const SizedBox(width: 6),
-            Text(
-              context.l10n.willSyncAutomatically,
-              style: const TextStyle(color: Color(0xFF6B6B7E), fontSize: 11, height: 1.3),
-            ),
-          ],
+  Widget _buildUnsyncedWalIndicator(List<Wal> unsyncedWals, int inFlightSeconds) {
+    final totalSeconds = unsyncedWals.fold<int>(0, (sum, w) => sum + w.seconds) + inFlightSeconds;
+    if (totalSeconds <= 5) return const SizedBox.shrink();
+    final minutes = totalSeconds ~/ 60;
+    final seconds = totalSeconds % 60;
+    final label = minutes > 0 ? '${minutes}m ${seconds}s' : '${seconds}s';
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1A1A24),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF2E2E3E), width: 0.5),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 7,
+                height: 7,
+                decoration: const BoxDecoration(color: Color(0xFF4CAF50), shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                context.l10n.audioSavedLocally(label),
+                style: const TextStyle(color: Color(0xFFE0E0E8), fontSize: 12.5, fontWeight: FontWeight.w500),
+              ),
+              if (inFlightSeconds > 0) ...[
+                const SizedBox(width: 8),
+                const SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF6C6C80)),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

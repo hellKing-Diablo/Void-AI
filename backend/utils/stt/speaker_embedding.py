@@ -1,12 +1,18 @@
 import io
+import logging
 import os
 import struct
 import wave
-from typing import Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
-import requests
+import httpx
 from scipy.spatial.distance import cdist
+
+from utils.executors import storage_executor, run_blocking
+from utils.http_client import get_stt_client
+
+logger = logging.getLogger(__name__)
 
 # Cosine distance threshold for speaker matching
 # Based on VoxCeleb 1 test set EER of 2.8%
@@ -37,7 +43,7 @@ def _get_api_url() -> str:
     return url
 
 
-def extract_embedding(audio_path: str) -> np.ndarray:
+def extract_embedding(audio_path: str) -> np.ndarray[Any, Any]:
     """
     Extract speaker embedding from an audio file using hosted API.
 
@@ -51,7 +57,7 @@ def extract_embedding(audio_path: str) -> np.ndarray:
 
     with open(audio_path, 'rb') as f:
         files = {'file': (os.path.basename(audio_path), f, 'audio/wav')}
-        response = requests.post(f"{api_url}/v2/embedding", files=files, timeout=300)
+        response = httpx.post(f"{api_url}/v2/embedding", files=files, timeout=300.0)
         response.raise_for_status()
 
     result = response.json()
@@ -69,7 +75,7 @@ def extract_embedding(audio_path: str) -> np.ndarray:
     return embedding
 
 
-def extract_embedding_from_bytes(audio_data: bytes, filename: str = "audio.wav") -> np.ndarray:
+def extract_embedding_from_bytes(audio_data: bytes, filename: str = "audio.wav") -> np.ndarray[Any, Any]:
     """
     Extract speaker embedding from audio bytes using hosted API.
 
@@ -90,7 +96,7 @@ def extract_embedding_from_bytes(audio_data: bytes, filename: str = "audio.wav")
     api_url = _get_api_url()
 
     files = {'file': (filename, audio_data, 'audio/wav')}
-    response = requests.post(f"{api_url}/v2/embedding", files=files, timeout=300)
+    response = httpx.post(f"{api_url}/v2/embedding", files=files, timeout=300.0)
     response.raise_for_status()
 
     result = response.json()
@@ -108,7 +114,66 @@ def extract_embedding_from_bytes(audio_data: bytes, filename: str = "audio.wav")
     return embedding
 
 
-def compare_embeddings(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
+def _read_file(path: str) -> bytes:
+    with open(path, 'rb') as f:
+        return f.read()
+
+
+async def async_extract_embedding(audio_path: str) -> np.ndarray[Any, Any]:
+    """Async version of extract_embedding using httpx.AsyncClient."""
+    api_url = _get_api_url()
+    client = get_stt_client()
+
+    file_data = await run_blocking(storage_executor, _read_file, audio_path)
+
+    files = {'file': (os.path.basename(audio_path), file_data, 'audio/wav')}
+    try:
+        response = await client.post(f"{api_url}/v2/embedding", files=files)
+        response.raise_for_status()
+    except Exception as e:
+        logger.error(f"async_extract_embedding failed for {audio_path}: {e}")
+        raise
+
+    result = response.json()
+    if isinstance(result, list):
+        embedding = np.array(result, dtype=np.float32)
+    else:
+        embedding = np.array(result['embedding'], dtype=np.float32)
+
+    if embedding.ndim == 1:
+        embedding = embedding.reshape(1, -1)
+    return embedding
+
+
+async def async_extract_embedding_from_bytes(audio_data: bytes, filename: str = "audio.wav") -> np.ndarray[Any, Any]:
+    """Async version of extract_embedding_from_bytes using httpx.AsyncClient."""
+    duration = _get_wav_duration(audio_data)
+    if duration < MIN_EMBEDDING_AUDIO_DURATION:
+        raise ValueError(f"Audio too short for speaker embedding: {duration:.3f}s < {MIN_EMBEDDING_AUDIO_DURATION}s")
+
+    api_url = _get_api_url()
+    client = get_stt_client()
+
+    files = {'file': (filename, audio_data, 'audio/wav')}
+    try:
+        response = await client.post(f"{api_url}/v2/embedding", files=files)
+        response.raise_for_status()
+    except Exception as e:
+        logger.error(f"async_extract_embedding_from_bytes failed: {e}")
+        raise
+
+    result = response.json()
+    if isinstance(result, list):
+        embedding = np.array(result, dtype=np.float32)
+    else:
+        embedding = np.array(result['embedding'], dtype=np.float32)
+
+    if embedding.ndim == 1:
+        embedding = embedding.reshape(1, -1)
+    return embedding
+
+
+def compare_embeddings(embedding1: np.ndarray[Any, Any], embedding2: np.ndarray[Any, Any]) -> float:
     """
     Compare two speaker embeddings using cosine distance.
 
@@ -128,7 +193,7 @@ def compare_embeddings(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
 
 
 def is_same_speaker(
-    embedding1: np.ndarray, embedding2: np.ndarray, threshold: float = SPEAKER_MATCH_THRESHOLD
+    embedding1: np.ndarray[Any, Any], embedding2: np.ndarray[Any, Any], threshold: float = SPEAKER_MATCH_THRESHOLD
 ) -> Tuple[bool, float]:
     """
     Determine if two embeddings belong to the same speaker.
@@ -145,7 +210,7 @@ def is_same_speaker(
     return distance < threshold, distance
 
 
-def embedding_to_bytes(embedding: np.ndarray) -> bytes:
+def embedding_to_bytes(embedding: np.ndarray[Any, Any]) -> bytes:
     """
     Serialize embedding to bytes for storage.
 
@@ -158,7 +223,7 @@ def embedding_to_bytes(embedding: np.ndarray) -> bytes:
     return embedding.astype(np.float32).tobytes()
 
 
-def bytes_to_embedding(data: bytes, dim: int = 512) -> np.ndarray:
+def bytes_to_embedding(data: bytes, dim: int = 512) -> np.ndarray[Any, Any]:
     """
     Deserialize embedding from bytes.
 
@@ -174,7 +239,9 @@ def bytes_to_embedding(data: bytes, dim: int = 512) -> np.ndarray:
 
 
 def find_best_match(
-    query_embedding: np.ndarray, candidate_embeddings: list[np.ndarray], threshold: float = SPEAKER_MATCH_THRESHOLD
+    query_embedding: np.ndarray[Any, Any],
+    candidate_embeddings: List[np.ndarray[Any, Any]],
+    threshold: float = SPEAKER_MATCH_THRESHOLD,
 ) -> Optional[Tuple[int, float]]:
     """
     Find the best matching speaker from a list of candidates.

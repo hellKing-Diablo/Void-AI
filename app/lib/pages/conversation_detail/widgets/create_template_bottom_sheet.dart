@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:flutter/material.dart';
 
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -13,9 +14,9 @@ import 'package:omi/backend/schema/app.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/pages/conversation_detail/conversation_detail_provider.dart';
 import 'package:omi/pages/conversation_detail/widgets/summarized_apps_sheet.dart';
+import 'package:omi/pages/conversation_detail/widgets/template_creation_outcome.dart';
 import 'package:omi/providers/app_provider.dart';
 import 'package:omi/utils/alerts/app_snackbar.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/logger.dart';
 
 class CreateTemplateBottomSheet extends StatefulWidget {
@@ -52,7 +53,7 @@ class _CreateTemplateBottomSheetState extends State<CreateTemplateBottomSheet> {
 
     // Draw white background
     final bgPaint = Paint()..color = Colors.white;
-    canvas.drawRect(Rect.fromLTWH(0, 0, size, size), bgPaint);
+    canvas.drawRect(const Rect.fromLTWH(0, 0, size, size), bgPaint);
 
     // Draw emoji text
     final textPainter = TextPainter(
@@ -137,7 +138,7 @@ class _CreateTemplateBottomSheetState extends State<CreateTemplateBottomSheet> {
 
       if (submitResult.$1) {
         // Success
-        MixpanelManager().quickTemplateCreated(
+        PlatformManager.instance.analytics.quickTemplateCreated(
           conversationId: widget.conversationId ?? '',
           appName: name,
           isPublic: _isPublic,
@@ -162,10 +163,11 @@ class _CreateTemplateBottomSheetState extends State<CreateTemplateBottomSheet> {
             _statusMessage = context.l10n.installingApp;
           });
 
-          // Enable/install the app for the user
-          final success = await enableAppServer(createdApp.id);
+          // Enable/install through the provider: it owns prefs, app-list
+          // state, and the failure dialog, so a failed install can no longer
+          // be reported as success (#10074 follow-up).
+          final success = await context.read<AppProvider>().toggleApp(createdApp.id, true, null);
           if (success) {
-            SharedPreferencesUtil().enableApp(createdApp.id);
             createdApp.enabled = true;
 
             // Update the conversation detail provider's cached apps
@@ -178,15 +180,24 @@ class _CreateTemplateBottomSheetState extends State<CreateTemplateBottomSheet> {
           if (mounted) {
             // Close the create template bottom sheet
             Navigator.pop(context);
-            AppSnackbar.showSnackbarSuccess(context.l10n.appCreatedAndInstalled);
+            // Polarity comes from the tested classifier so a failed install
+            // can never be reported as success (#10074).
+            final outcome = success ? TemplateCreationOutcome.installed : TemplateCreationOutcome.installFailed;
+            if (templateCreationOutcomeIsError(outcome)) {
+              // The provider already showed the failure dialog; tell the user
+              // what state they are actually in.
+              AppSnackbar.showSnackbarError(context.l10n.failedToInstallApp(createdApp.name));
+            } else {
+              AppSnackbar.showSnackbarSuccess(context.l10n.appCreatedAndInstalled);
 
-            // Show the summarized apps sheet so user can use the new app
-            showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              backgroundColor: Colors.transparent,
-              builder: (context) => const SummarizedAppsBottomSheet(),
-            );
+              // Show the summarized apps sheet so user can use the new app
+              showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                backgroundColor: Colors.transparent,
+                builder: (context) => const SummarizedAppsBottomSheet(),
+              );
+            }
           }
         } else if (mounted) {
           Navigator.pop(context);
@@ -401,7 +412,7 @@ class _CreateTemplateBottomSheetState extends State<CreateTemplateBottomSheet> {
                                         _isPublic = value;
                                       });
                                     },
-                              activeColor: const Color(0xFF6366F1),
+                              activeThumbColor: const Color(0xFF6366F1),
                             ),
                           ],
                         ),

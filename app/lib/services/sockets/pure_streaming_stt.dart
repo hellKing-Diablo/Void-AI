@@ -6,7 +6,6 @@ import 'dart:typed_data';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-import 'package:omi/backend/schema/bt_device/bt_device.dart';
 import 'package:omi/models/stt_response_schema.dart';
 import 'package:omi/models/stt_result.dart';
 import 'package:omi/services/custom_stt_log_service.dart';
@@ -324,24 +323,31 @@ class GeminiStreamingSttSocket implements IPureSocket {
       _frameBuffer.clear();
       _bufferedBytes = 0;
 
-      Uint8List pcmData = combined;
+      Uint8List? pcmData = combined;
       if (transcoder != null) {
         try {
           pcmData = transcoder!.transcodeFrames([combined]);
-        } catch (_) {}
+        } catch (e) {
+          // Don't ship un-transcoded bytes tagged as PCM — that produces a corrupted stream.
+          // Skip only the tail send; teardown below must still run.
+          CustomSttLogService.instance.error('GeminiStreaming', 'Transcode error (flush): $e');
+          pcmData = null;
+        }
       }
 
-      final realtimeInput = {
-        'realtimeInput': {
-          'mediaChunks': [
-            {'mimeType': 'audio/pcm;rate=$sampleRate', 'data': base64Encode(pcmData)},
-          ],
-        },
-      };
+      if (pcmData != null) {
+        final realtimeInput = {
+          'realtimeInput': {
+            'mediaChunks': [
+              {'mimeType': 'audio/pcm;rate=$sampleRate', 'data': base64Encode(pcmData)},
+            ],
+          },
+        };
 
-      try {
-        _channel!.sink.add(jsonEncode(realtimeInput));
-      } catch (_) {}
+        try {
+          _channel!.sink.add(jsonEncode(realtimeInput));
+        } catch (_) {}
+      }
     }
 
     await Future.delayed(const Duration(milliseconds: 500));
@@ -402,8 +408,6 @@ class PureStreamingSttSocket implements IPureSocket {
   PureSocketStatus get status => _status;
 
   IPureSocketListener? _listener;
-
-  double _audioOffsetSeconds = 0;
 
   // Buffer for accumulating small frames before sending
   final List<Uint8List> _frameBuffer = [];
@@ -521,34 +525,8 @@ class PureStreamingSttSocket implements IPureSocket {
       final result = SttTranscriptionResult.fromJsonWithSchema(json, config.responseSchema, audioOffsetSeconds: 0);
 
       if (result.isNotEmpty) {
-        if (result.segments.isNotEmpty) {
-          _audioOffsetSeconds = result.segments.last.end;
-        }
-
         // Aggregate words by speaker (matching backend TranscriptSegment format)
-        final segments = <Map<String, dynamic>>[];
-        for (final segment in result.segments) {
-          if (segment.text.trim().isEmpty) continue;
-
-          final speakerId = segment.speakerId;
-          final speaker = 'SPEAKER_$speakerId';
-
-          if (segments.isEmpty || segments.last['speaker'] != speaker) {
-            segments.add({
-              'text': segment.text.trim(),
-              'speaker': speaker,
-              'speaker_id': speakerId,
-              'is_user': false,
-              'start': segment.start,
-              'end': segment.end,
-              'person_id': null,
-            });
-          } else {
-            final last = segments.last;
-            last['text'] = '${last['text']} ${segment.text.trim()}';
-            last['end'] = segment.end;
-          }
-        }
+        final segments = mergeTranscriptSegmentsBySpeaker(result.segments);
 
         if (segments.isNotEmpty) {
           onMessage(jsonEncode(segments));
@@ -659,7 +637,6 @@ class PureStreamingSttSocket implements IPureSocket {
     _keepAliveTimer?.cancel();
     _frameBuffer.clear();
     _bufferedBytes = 0;
-    _audioOffsetSeconds = 0;
   }
 
   @override

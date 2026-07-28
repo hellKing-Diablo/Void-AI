@@ -28,6 +28,8 @@ class CategoryChip extends StatelessWidget {
         return Colors.amber;
       case MemoryCategory.manual:
         return Colors.purple;
+      case MemoryCategory.workflow:
+        return Colors.teal;
     }
   }
 
@@ -39,6 +41,8 @@ class CategoryChip extends StatelessWidget {
         return Icons.lightbulb_outlined;
       case MemoryCategory.manual:
         return Icons.edit_outlined;
+      case MemoryCategory.workflow:
+        return Icons.account_tree_outlined;
     }
   }
 
@@ -56,6 +60,9 @@ class CategoryChip extends StatelessWidget {
       case MemoryCategory.manual:
         displayName = "Manual";
         break;
+      case MemoryCategory.workflow:
+        displayName = "Workflow";
+        break;
     }
 
     final countText = count != null ? ' ($count)' : '';
@@ -68,8 +75,8 @@ class CategoryChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
       decoration: BoxDecoration(
         color: isSelected
-            ? (onTap != null ? categoryColor : categoryColor.withOpacity(0.15))
-            : Color(0xFF35343B).withOpacity(0.6),
+            ? (onTap != null ? categoryColor : categoryColor.withValues(alpha: 0.15))
+            : const Color(0xFF35343B).withValues(alpha: 0.6),
         borderRadius: BorderRadius.circular(13),
         border: isSelected && onTap == null ? Border.all(color: categoryColor, width: 1) : null,
       ),

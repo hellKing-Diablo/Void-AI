@@ -1,5 +1,3 @@
-import 'package:flutter/cupertino.dart';
-
 import 'package:just_audio/just_audio.dart';
 
 import 'package:omi/backend/http/api/users.dart';
@@ -22,6 +20,16 @@ class PeopleProvider extends BaseProvider {
     notifyListeners();
     setPeople();
     _setupAudioPlayerListeners();
+  }
+
+  void clearUserData() {
+    people = [];
+    samplesUrl = {};
+    currentPlayingPersonIndex = null;
+    currentPlayingIndex = null;
+    isPlaying = false;
+    _audioPlayer.stop();
+    notifyListeners();
   }
 
   setPeople() async {

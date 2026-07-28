@@ -9,6 +9,76 @@ import WidgetKit
 
 extension FlutterError: Error {}
 
+// MARK: - Quick Actions Icon Patcher
+
+/// Observes UIApplication.shortcutItems via KVO and replaces template-image icons
+/// (set by the quick_actions Flutter plugin) with native SF Symbol icons.
+final class QuickActionsIconPatcher: NSObject {
+
+    static let shared = QuickActionsIconPatcher()
+    private var isObserving = false
+
+    private let symbolMap: [String: String] = [
+        "add_task":        "checkmark.circle.fill",
+        "ask_omi":         "message.fill",
+        "voice_mode":      "waveform",
+        "mute":            "mic.slash.fill",
+        "unmute":          "mic.fill",
+        "connect_device":  "cable.connector.horizontal",
+        "device_settings": "slider.horizontal.3",
+    ]
+
+    func startObserving() {
+        guard !isObserving else { return }
+        UIApplication.shared.addObserver(
+            self,
+            forKeyPath: #keyPath(UIApplication.shortcutItems),
+            options: [.new],
+            context: nil
+        )
+        isObserving = true
+    }
+
+    func stopObserving() {
+        guard isObserving else { return }
+        UIApplication.shared.removeObserver(self, forKeyPath: #keyPath(UIApplication.shortcutItems))
+        isObserving = false
+    }
+
+    override func observeValue(
+        forKeyPath keyPath: String?,
+        of object: Any?,
+        change: [NSKeyValueChangeKey: Any]?,
+        context: UnsafeMutableRawPointer?
+    ) {
+        guard keyPath == #keyPath(UIApplication.shortcutItems) else { return }
+        DispatchQueue.main.async { self.patchIcons() }
+    }
+
+    private func patchIcons() {
+        guard let items = UIApplication.shared.shortcutItems, !items.isEmpty else { return }
+
+        let patched = items.map { item -> UIApplicationShortcutItem in
+            guard let symbol = symbolMap[item.type] else { return item }
+            let icon = UIApplicationShortcutIcon(systemImageName: symbol)
+            return UIApplicationShortcutItem(
+                type: item.type,
+                localizedTitle: item.localizedTitle,
+                localizedSubtitle: item.localizedSubtitle,
+                icon: icon,
+                userInfo: item.userInfo
+            )
+        }
+
+        // Stop observing before setting to avoid infinite KVO loop.
+        stopObserving()
+        UIApplication.shared.shortcutItems = patched
+        startObserving()
+    }
+
+    deinit { stopObserving() }
+}
+
 @main
 @objc class AppDelegate: FlutterAppDelegate {
   private var methodChannel: FlutterMethodChannel?
@@ -16,11 +86,13 @@ extension FlutterError: Error {}
   private var appleHealthChannel: FlutterMethodChannel?
   private let appleRemindersService = AppleRemindersService()
   private let appleHealthService = AppleHealthService()
+  private var phoneMicController: PhoneMicController?
   private var notificationTitleOnKill: String?
   private var notificationBodyOnKill: String?
 
   var session: WCSession?
     var flutterWatchAPI: WatchRecorderFlutterAPI?
+    var rayBanMetaHostApi: RayBanMetaHostApiImpl?
   private var audioChunks: [Int: (Data, Double)] = [:] // (audioData, sampleRate)
   private var nextExpectedChunkIndex: Int = 0
   private var isRecordingActive: Bool = false // Track recording state to handle app restarts
@@ -30,6 +102,7 @@ extension FlutterError: Error {}
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     GeneratedPluginRegistrant.register(with: self)
+    QuickActionsIconPatcher.shared.startObserving()
       
       
       if WCSession.isSupported() {
@@ -55,6 +128,26 @@ extension FlutterError: Error {}
           NSLog("[OmiBle] BLE Pigeon APIs registered successfully")
       } else {
           NSLog("[OmiBle] ERROR: Could not get FlutterBinaryMessenger")
+      }
+
+      // Ray-Ban Meta (Meta Wearables DAT camera + Bluetooth HFP mic) — Pigeon APIs.
+      // Registered unconditionally; the impl reports availability mode based on
+      // whether the DAT SDK is linked into this build.
+      if let messenger = (window?.rootViewController as? FlutterViewController)?.binaryMessenger {
+          let rayBanFlutterApi = RayBanMetaFlutterAPI(binaryMessenger: messenger)
+          let rayBanApi = RayBanMetaHostApiImpl(flutterAPI: rayBanFlutterApi)
+          rayBanMetaHostApi = rayBanApi
+          RayBanMetaHostAPISetup.setUp(binaryMessenger: messenger, api: rayBanApi)
+      }
+
+      // Native phone-mic capture (conversation recording) — Pigeon APIs.
+      // Self-healing AVAudioEngine capture; interruption/route recovery is
+      // handled natively, Dart only mirrors the state.
+      if let messenger = (window?.rootViewController as? FlutterViewController)?.binaryMessenger {
+          let phoneMicFlutterApi = PhoneMicFlutterApi(binaryMessenger: messenger)
+          let controller = PhoneMicController(flutterApi: phoneMicFlutterApi)
+          phoneMicController = controller
+          PhoneMicHostApiSetup.setUp(binaryMessenger: messenger, api: PhoneMicHostApiImpl(controller: controller))
       }
 
       // Retrieve the link from parameters
@@ -158,7 +251,7 @@ extension FlutterError: Error {}
     }
 
     // Register Phone Calls plugin
-    PhoneCallsPlugin.register(with: self.registrar(forPlugin: "PhoneCallsPlugin")!)
+    OmiPhoneCallsPlugin.register(with: self.registrar(forPlugin: "OmiPhoneCallsPlugin")!)
 
     // here, Without this code the task will not work.
     SwiftFlutterForegroundTaskPlugin.setPluginRegistrantCallback { registry in
@@ -169,6 +262,19 @@ extension FlutterError: Error {}
     }
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  // Meta AI app calls back into this app to finish Ray-Ban Meta registration
+  // (AppLinkURLScheme in the MWDAT Info.plist dictionary).
+  override func application(
+    _ app: UIApplication,
+    open url: URL,
+    options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+  ) -> Bool {
+    if rayBanMetaHostApi?.handleUrl(url) == true {
+      return true
+    }
+    return super.application(app, open: url, options: options)
   }
 
   private func handleMethodCall(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -242,7 +348,13 @@ extension FlutterError: Error {}
       completionHandler(exportedMappings.isEmpty ? .noData : .newData)
   }
 
+  override func applicationWillEnterForeground(_ application: UIApplication) {
+    super.applicationWillEnterForeground(application)
+    OmiBleManager.shared.reconnectStalePeripherals()
+  }
+
   override func applicationWillTerminate(_ application: UIApplication) {
+    QuickActionsIconPatcher.shared.stopObserving()
     OmiBleManager.shared.disconnectAllPeripherals()
 
     // If title and body are nil, then we don't need to show notification.

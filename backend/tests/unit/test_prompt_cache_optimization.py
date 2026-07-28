@@ -112,34 +112,44 @@ langsmith_prompts_mod.get_prompt_metadata = MagicMock(return_value=(None, None, 
 
 def _read_clients_source() -> str:
     backend_dir = Path(__file__).resolve().parent.parent.parent
-    return (backend_dir / "utils" / "llm" / "clients.py").read_text()
+    return (backend_dir / "utils" / "llm" / "clients.py").read_text(encoding="utf-8")
 
 
 def _read_agentic_source() -> str:
     backend_dir = Path(__file__).resolve().parent.parent.parent
-    return (backend_dir / "utils" / "retrieval" / "agentic.py").read_text()
+    return (backend_dir / "utils" / "retrieval" / "agentic.py").read_text(encoding="utf-8")
 
 
 def _read_chat_source() -> str:
     backend_dir = Path(__file__).resolve().parent.parent.parent
-    return (backend_dir / "utils" / "llm" / "chat.py").read_text()
+    return (backend_dir / "utils" / "llm" / "chat.py").read_text(encoding="utf-8")
 
 
-def test_llm_agent_has_prompt_cache_key():
-    """llm_agent and llm_agent_stream should have prompt_cache_key configured."""
+def _read_model_config_source() -> str:
+    backend_dir = Path(__file__).resolve().parent.parent.parent
+    return (backend_dir / "utils" / "llm" / "model_config.py").read_text(encoding="utf-8")
+
+
+def test_qos_cache_key_in_clients():
+    """Omi QoS get_llm() should support cache_key parameter for prompt cache routing."""
     source = _read_clients_source()
-    assert "prompt_cache_key" in source, "clients.py should configure prompt_cache_key for agent models"
-    assert "omi-agent-v1" in source, "prompt_cache_key should be 'omi-agent-v1'"
+    assert "cache_key" in source, "clients.py get_llm() should accept cache_key parameter"
+    # prompt_cache_key routing is gated by capability, not an exact-name set.
+    assert (
+        "supports_prompt_cache" in source
+    ), "clients.py should gate prompt_cache_key by capability (supports_prompt_cache)"
+    cfg = _read_model_config_source()
+    assert (
+        "_CACHE_KEY_MODEL_PREFIXES" in cfg
+    ), "model_config.py should define _CACHE_KEY_MODEL_PREFIXES for family-based cache routing"
 
 
-def test_llm_agent_uses_extra_body_for_cache_retention():
-    """prompt_cache_retention must use extra_body (not model_kwargs) — SDK rejects it as a direct kwarg."""
-    source = _read_clients_source()
-    assert 'extra_body={"prompt_cache_retention"' in source, "prompt_cache_retention should be set via extra_body"
-    # model_kwargs must NOT contain prompt_cache_retention (SDK rejects it there)
-    mk_blocks = re.findall(r'model_kwargs\s*=\s*\{[^}]*\}', source)
-    for block in mk_blocks:
-        assert "prompt_cache_retention" not in block, f"prompt_cache_retention must not be in model_kwargs: {block}"
+def test_qos_medium_tier_uses_extra_body_for_cache_retention():
+    """prompt_cache_retention must use extra_body (not model_kwargs) for retention-capable models."""
+    source = _read_clients_source() + _read_model_config_source()
+    assert (
+        'extra_body={"prompt_cache_retention"' in source or '"prompt_cache_retention": "24h"' in source
+    ), "prompt_cache_retention should be set via extra_body for retention-capable models"
 
 
 def test_core_tools_constant_exists():

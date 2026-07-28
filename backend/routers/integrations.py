@@ -1,20 +1,30 @@
+# async-blockers: no-import-scope
+# async-blockers: no-changed-range-scope  # pre-existing patterns surfaced by type-annotation import changes
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from typing import Dict, Any, Optional
+from typing import Any, Dict, List, Optional, cast
 from pydantic import BaseModel, Field
+from urllib.parse import urlencode
 import os
 import secrets
 import json
 import base64
 import hashlib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import httpx
 
 import database.users as users_db
 import database.redis_db as redis_db
 from utils.other import endpoints as auth
 from utils.log_sanitizer import sanitize
+from utils.executors import run_blocking, db_executor
+from utils.retrieval.tools.google_utils import (
+    GMAIL_READONLY_SCOPE,
+    GOOGLE_INTEGRATION_KEY,
+    GOOGLE_OAUTH_SCOPES,
+    google_integration_has_scope,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -35,14 +45,14 @@ OAUTH_CONFIGS = {
 }
 
 # Provider-specific OAuth URL configuration
-AUTH_PROVIDERS = {
+AUTH_PROVIDERS: Dict[str, Dict[str, Any]] = {
     'google_calendar': {
         'client_env': 'GOOGLE_CLIENT_ID',
         'auth_base': 'https://accounts.google.com/o/oauth2/v2/auth',
         'redirect_path': '/v2/integrations/google-calendar/callback',
         'query': {
             'response_type': 'code',
-            'scope': 'https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/contacts.other.readonly',
+            'scope': ' '.join(GOOGLE_OAUTH_SCOPES),
             'access_type': 'offline',
             'prompt': 'consent',
         },
@@ -88,8 +98,7 @@ def render_oauth_response(
     config = OAUTH_CONFIGS.get(app_key, {'name': app_key.title()})
 
     if success:
-        context = {
-            'request': request,
+        context: Dict[str, Any] = {
             'title': f"{config['name']} Auth",
             'icon': '✓',
             'message': 'Authentication Successful!',
@@ -98,7 +107,7 @@ def render_oauth_response(
             'show_spinner': True,
         }
     else:
-        error_messages = {
+        error_messages: Dict[str, str] = {
             'missing_code': 'No authorization code received from {}.'.format(config['name']),
             'invalid_state': 'Invalid or expired authentication request.',
             'config_error': '{} OAuth not properly configured.'.format(config['name']),
@@ -106,16 +115,15 @@ def render_oauth_response(
         }
 
         context = {
-            'request': request,
             'title': f"{config['name']} Auth Error",
             'icon': '❌',
             'message': f"{'Security' if error_type == 'invalid_state' else 'Configuration' if error_type == 'config_error' else 'Authentication'} Error",
-            'description': error_messages.get(error_type, 'An error occurred.'),
+            'description': error_messages.get(error_type or 'unknown', 'An error occurred.'),
             'redirect_url': f'omi://{app_key}/callback?error={error_type or "unknown"}',
             'show_spinner': False,
         }
 
-    return templates.TemplateResponse('oauth_callback.html', context)
+    return templates.TemplateResponse(request, 'oauth_callback.html', context)
 
 
 def validate_and_consume_oauth_state(state_token: Optional[str]) -> Optional[Dict[str, str]]:
@@ -130,20 +138,23 @@ def validate_and_consume_oauth_state(state_token: Optional[str]) -> Optional[Dic
         return None
 
     state_key = f"oauth_state:{state_token}"
-    state_data_str = redis_db.r.get(state_key)
+    # Atomic get-and-delete: an OAuth state is single-use, so consuming it must be one operation.
+    # A separate GET then DELETE lets two concurrent callbacks carrying the same state both read the
+    # value before either delete runs, which weakens replay protection -- and offloading the consume
+    # to the db_executor thread pool makes that interleaving reachable. GETDEL removes it atomically,
+    # so only one caller ever receives the value.
+    state_data_str = redis_db.r.getdel(state_key)
 
     if not state_data_str:
         return None
 
     try:
-        state_data = json.loads(state_data_str.decode() if isinstance(state_data_str, bytes) else state_data_str)
-        # Delete after successful parse to prevent replay
-        redis_db.r.delete(state_key)
+        loaded: object = json.loads(state_data_str.decode() if isinstance(state_data_str, bytes) else state_data_str)
+        state_data = cast(Dict[str, str], loaded) if isinstance(loaded, dict) else {}
+        # GETDEL above already removed the key atomically; no separate delete needed.
         return state_data
     except Exception as e:
         logger.error(f"Error parsing state data: {e}")
-        # Delete invalid state to prevent repeated parse failures
-        redis_db.r.delete(state_key)
         return None
 
 
@@ -164,14 +175,18 @@ class AppleHealthSyncData(BaseModel):
     # Steps data
     total_steps: Optional[int] = Field(default=None, description="Total steps in period")
     average_steps_per_day: Optional[float] = Field(default=None, description="Average steps per day")
-    daily_steps: Optional[list] = Field(default=None, description="Daily steps breakdown [{date, steps}]")
+    daily_steps: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="Daily steps breakdown [{date, steps}]"
+    )
 
     # Sleep data
     total_sleep_hours: Optional[float] = Field(default=None, description="Total sleep hours")
     total_in_bed_hours: Optional[float] = Field(default=None, description="Total time in bed hours")
     sleep_sessions_count: Optional[int] = Field(default=None, description="Number of sleep sessions")
-    sleep_sessions: Optional[list] = Field(default=None, description="Sleep session details")
-    daily_sleep: Optional[list] = Field(default=None, description="Daily sleep breakdown [{date, sleepHours}]")
+    sleep_sessions: Optional[List[Dict[str, Any]]] = Field(default=None, description="Sleep session details")
+    daily_sleep: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="Daily sleep breakdown [{date, sleepHours}]"
+    )
 
     # Heart rate data
     heart_rate_average: Optional[float] = Field(default=None, description="Average heart rate")
@@ -181,10 +196,12 @@ class AppleHealthSyncData(BaseModel):
     # Active energy data
     total_active_energy: Optional[float] = Field(default=None, description="Total active energy kcal")
     average_active_energy_per_day: Optional[float] = Field(default=None, description="Average daily active energy")
-    daily_active_energy: Optional[list] = Field(default=None, description="Daily energy breakdown [{date, calories}]")
+    daily_active_energy: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="Daily energy breakdown [{date, calories}]"
+    )
 
     # Workouts data
-    workouts: Optional[list] = Field(default=None, description="List of workout records")
+    workouts: Optional[List[Dict[str, Any]]] = Field(default=None, description="List of workout records")
 
 
 class IntegrationResponse(BaseModel):
@@ -194,14 +211,43 @@ class IntegrationResponse(BaseModel):
     app_key: str = Field(description="Integration app key")
 
 
+class IntegrationMutationResponse(BaseModel):
+    status: str
+    app_key: str
+
+
+class AppleHealthSyncResponse(BaseModel):
+    status: str
+    app_key: str
+    synced_at: str
+    data_types_synced: list[str] = Field(default_factory=list)
+
+
 # *****************************
 # ********** ROUTES ***********
 # *****************************
 
 
+# Integrations that are not stored under their own key: they are derived from another
+# grant, and each requires a specific scope on that grant.
+DERIVED_INTEGRATIONS = {
+    'gmail': (GOOGLE_INTEGRATION_KEY, GMAIL_READONLY_SCOPE),
+}
+
+
 @router.get("/v1/integrations/{app_key}", response_model=IntegrationResponse, tags=['integrations'])
 def get_integration(app_key: str, uid: str = Depends(auth.get_current_user_uid)):
-    """Get integration connection status for the current user."""
+    """Get integration connection status for the current user.
+
+    Gmail has no grant of its own — it rides the Google Calendar OAuth grant and is
+    connected only when that grant actually carries the Gmail scope.
+    """
+    if app_key in DERIVED_INTEGRATIONS:
+        source_key, required_scope = DERIVED_INTEGRATIONS[app_key]
+        source = users_db.get_integration(uid, source_key)
+        connected = bool(source and source.get('connected')) and google_integration_has_scope(source, required_scope)
+        return IntegrationResponse(connected=connected, app_key=app_key)
+
     integration = users_db.get_integration(uid, app_key)
 
     if integration and integration.get('connected'):
@@ -210,7 +256,7 @@ def get_integration(app_key: str, uid: str = Depends(auth.get_current_user_uid))
         return IntegrationResponse(connected=False, app_key=app_key)
 
 
-@router.put("/v1/integrations/{app_key}", tags=['integrations'])
+@router.put("/v1/integrations/{app_key}", tags=['integrations'], response_model=IntegrationMutationResponse)
 def save_integration(app_key: str, data: IntegrationData, uid: str = Depends(auth.get_current_user_uid)):
     """Save or update an integration connection."""
     # Convert Pydantic model to dict, excluding None values
@@ -223,7 +269,14 @@ def save_integration(app_key: str, data: IntegrationData, uid: str = Depends(aut
 
 @router.delete("/v1/integrations/{app_key}", status_code=204, tags=['integrations'])
 def delete_integration(app_key: str, uid: str = Depends(auth.get_current_user_uid)):
-    """Delete an integration connection."""
+    """Delete an integration connection.
+
+    Deleting a derived integration deletes the grant it rides on — there is no
+    separate token to revoke.
+    """
+    if app_key in DERIVED_INTEGRATIONS:
+        app_key = DERIVED_INTEGRATIONS[app_key][0]
+
     success = users_db.delete_integration(uid, app_key)
 
     if not success:
@@ -232,7 +285,7 @@ def delete_integration(app_key: str, uid: str = Depends(auth.get_current_user_ui
     return None
 
 
-@router.put("/v1/integrations/apple-health/sync", tags=['integrations'])
+@router.put("/v1/integrations/apple-health/sync", response_model=AppleHealthSyncResponse, tags=['integrations'])
 def sync_apple_health_data(data: AppleHealthSyncData, uid: str = Depends(auth.get_current_user_uid)):
     """
     Sync Apple Health data from the iOS device.
@@ -243,7 +296,7 @@ def sync_apple_health_data(data: AppleHealthSyncData, uid: str = Depends(auth.ge
     Unlike other integrations that use OAuth, Apple Health data is pushed from the device.
     """
     # Build the health data structure
-    health_data = {
+    health_data: Dict[str, Any] = {
         'period_days': data.period_days,
     }
 
@@ -288,7 +341,7 @@ def sync_apple_health_data(data: AppleHealthSyncData, uid: str = Depends(auth.ge
         health_data['workouts'] = data.workouts
 
     # Save the integration with health data
-    integration_data = {
+    integration_data: Dict[str, Any] = {
         'connected': True,
         'health_data': health_data,
         'last_synced': datetime.now(timezone.utc).isoformat(),
@@ -321,7 +374,13 @@ def get_oauth_url(app_key: str, uid: str = Depends(auth.get_current_user_uid)):
     Get OAuth authorization URL for an integration.
     Frontend opens this URL in browser to start OAuth flow.
     Uses secure random state tokens to prevent CSRF attacks.
+
+    A derived integration (Gmail) authorizes through the grant it rides on, so the
+    whole flow — state, provider config and callback — runs under the source key.
     """
+    if app_key in DERIVED_INTEGRATIONS:
+        app_key = DERIVED_INTEGRATIONS[app_key][0]
+
     base_url = os.getenv('BASE_API_URL')
     if not base_url:
         logger.error(f'ERROR: BASE_API_URL not configured for integration OAuth')
@@ -341,7 +400,7 @@ def get_oauth_url(app_key: str, uid: str = Depends(auth.get_current_user_uid)):
 
     if app_key in AUTH_PROVIDERS:
         cfg = AUTH_PROVIDERS[app_key]
-        client_id = os.getenv(cfg['client_env'])
+        client_id = os.getenv(cast(str, cfg['client_env']))
         if not client_id:
             logger.error(f"ERROR: {cfg['client_env']} not configured for {cfg['log_name']} integration OAuth")
             raise HTTPException(status_code=500, detail=cfg['error_detail'])
@@ -349,14 +408,12 @@ def get_oauth_url(app_key: str, uid: str = Depends(auth.get_current_user_uid)):
         base_url_clean = base_url.rstrip('/')
         redirect_uri = f"{base_url_clean}{cfg['redirect_path']}"
 
-        from urllib.parse import urlencode
-
-        params = {
+        params: Dict[str, str] = {
             'client_id': client_id,
             'redirect_uri': redirect_uri,
             'state': state_token,
         }
-        params.update(cfg['query'])
+        params.update(cast(Dict[str, str], cfg['query']))
 
         if cfg.get('requires_pkce'):
             code_verifier = secrets.token_urlsafe(32)
@@ -418,11 +475,13 @@ async def handle_oauth_callback(
         return render_oauth_response(request, app_key, success=False, error_type='missing_code')
 
     # Validate state token
-    state_data = validate_and_consume_oauth_state(state)
+    state_data = await run_blocking(db_executor, validate_and_consume_oauth_state, state)
     if not state_data or state_data.get('app_key') != app_key:
         return render_oauth_response(request, app_key, success=False, error_type='invalid_state')
 
-    uid = state_data['uid']
+    uid = state_data.get('uid')
+    if not uid:
+        return render_oauth_response(request, app_key, success=False, error_type='invalid_state')
 
     try:
         client = get_http_client()
@@ -461,9 +520,12 @@ async def handle_oauth_callback(
                 logger.info(f'{app_key}: No access token received in response')
                 return render_oauth_response(request, app_key, success=False, error_type='server_error')
 
-            integration_data = {
+            integration_data: Dict[str, Any] = {
                 'connected': True,
                 'access_token': access_token,
+                # Google returns only the scopes the user actually approved; store them so
+                # scope-derived integrations (Gmail) can tell granted from merely requested.
+                'granted_scopes': (token_data.get('scope') or '').split(),
             }
 
             if refresh_token:
@@ -477,7 +539,7 @@ async def handle_oauth_callback(
 
             # Store in Firebase
             try:
-                users_db.set_integration(uid, app_key, integration_data)
+                await run_blocking(db_executor, users_db.set_integration, uid, app_key, integration_data)
             except Exception as e:
                 logger.error(f'{app_key}: Error storing tokens in Firebase: {e}')
                 return render_oauth_response(request, app_key, success=False, error_type='server_error')
@@ -524,7 +586,7 @@ async def oauth_callback(
     client_secret = os.getenv(client_secret_env)
     base_url = os.getenv('BASE_API_URL')
 
-    if not all([client_id, client_secret, base_url]):
+    if not client_id or not client_secret or not base_url:
         return render_oauth_response(request, normalized_key, success=False, error_type='config_error')
 
     base_url_clean = base_url.rstrip('/')
@@ -549,7 +611,7 @@ async def oauth_callback(
         return await handle_oauth_callback(request, normalized_key, code, state, config)
 
 
-@router.on_event("shutdown")
+@router.on_event("shutdown")  # type: ignore[reportDeprecated]  # FastAPI on_event still functional; lifespan migration would change app wiring
 async def shutdown_http_client():
     """Cleanup HTTP client on app shutdown."""
     await close_http_client()

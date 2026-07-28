@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:omi/utils/platform/platform_manager.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -17,9 +18,11 @@ import 'package:omi/backend/http/api/users.dart';
 import 'package:omi/backend/preferences.dart';
 import 'package:omi/env/env.dart';
 import 'package:omi/models/stt_provider.dart';
-import 'package:omi/pages/persona/persona_profile.dart';
+import 'package:omi/pages/settings/conversation_display_settings.dart';
 import 'package:omi/pages/settings/conversation_timeout_dialog.dart';
+import 'package:omi/pages/settings/data_privacy_page.dart';
 import 'package:omi/pages/settings/import_history_page.dart';
+import 'package:omi/pages/payments/payments_page.dart';
 import 'package:omi/pages/settings/transcription_settings_page.dart';
 import 'package:omi/pages/settings/widgets/create_mcp_api_key_dialog.dart';
 import 'package:omi/pages/settings/widgets/developer_api_keys_section.dart';
@@ -28,19 +31,31 @@ import 'package:omi/providers/device_provider.dart';
 import 'package:omi/providers/developer_mode_provider.dart';
 import 'package:omi/providers/mcp_provider.dart';
 import 'package:omi/utils/alerts/app_snackbar.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
 import 'package:omi/utils/debug_log_manager.dart';
+import 'package:omi/utils/firmware_update_build_policy.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 import 'package:omi/utils/logger.dart';
 
-class DeveloperSettingsPage extends StatefulWidget {
+class DeveloperSettingsPage extends StatelessWidget {
   const DeveloperSettingsPage({super.key});
 
   @override
-  State<DeveloperSettingsPage> createState() => _DeveloperSettingsPageState();
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider(
+      create: (_) => DeveloperModeProvider()..initialize(),
+      child: const _DeveloperSettingsPageView(),
+    );
+  }
 }
 
-class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
+class _DeveloperSettingsPageView extends StatefulWidget {
+  const _DeveloperSettingsPageView();
+
+  @override
+  State<_DeveloperSettingsPageView> createState() => _DeveloperSettingsPageState();
+}
+
+class _DeveloperSettingsPageState extends State<_DeveloperSettingsPageView> {
   @override
   void initState() {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -49,10 +64,48 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
     super.initState();
   }
 
+  // iPad requires a non-zero sharePositionOrigin (popover anchor) for the share sheet.
+  Rect _shareOrigin() {
+    if (!mounted) return const Rect.fromLTWH(0, 0, 100, 100);
+    final box = context.findRenderObject() as RenderBox?;
+    if (box != null && box.hasSize && box.size.width > 0 && box.size.height > 0) {
+      return box.localToGlobal(Offset.zero) & box.size;
+    }
+    return const Rect.fromLTWH(0, 0, 100, 100);
+  }
+
   Widget _buildSectionContainer({required List<Widget> children}) {
     return Container(
       decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(12)),
       child: Column(children: children),
+    );
+  }
+
+  Widget _buildNavItem({required FaIconData icon, required String title, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(14)),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(color: const Color(0xFF2A2A2E), borderRadius: BorderRadius.circular(10)),
+              child: Center(child: FaIcon(icon, color: Colors.grey.shade400, size: 16)),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500),
+              ),
+            ),
+            FaIcon(FontAwesomeIcons.chevronRight, color: Colors.grey.shade600, size: 14),
+          ],
+        ),
+      ),
     );
   }
 
@@ -99,7 +152,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
   Widget _buildExperimentalItem({
     required String title,
     required String description,
-    required IconData icon,
+    required FaIconData icon,
     required bool value,
     required ValueChanged<bool>? onChanged,
   }) {
@@ -125,7 +178,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
             ],
           ),
         ),
-        Switch(value: value, onChanged: onChanged, activeColor: const Color(0xFF22C55E)),
+        Switch(value: value, onChanged: onChanged, activeThumbColor: const Color(0xFF22C55E)),
       ],
     );
   }
@@ -133,7 +186,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
   Widget _buildWebhookItem({
     required String title,
     required String description,
-    required IconData icon,
+    required FaIconData icon,
     required bool isEnabled,
     required ValueChanged<bool> onToggle,
     required TextEditingController controller,
@@ -163,7 +216,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                 ],
               ),
             ),
-            Switch(value: isEnabled, onChanged: onToggle, activeColor: const Color(0xFF22C55E)),
+            Switch(value: isEnabled, onChanged: onToggle, activeThumbColor: const Color(0xFF22C55E)),
           ],
         ),
         if (isEnabled) ...[
@@ -244,6 +297,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
       builder: (context, provider, child) {
         if (provider.isLoading && provider.keys.isEmpty) {
           return Container(
+            width: double.infinity,
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(12)),
             child: const Center(child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
@@ -251,6 +305,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
         }
         if (provider.error != null) {
           return Container(
+            width: double.infinity,
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(12)),
             child: Center(
@@ -260,6 +315,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
         }
         if (provider.keys.isEmpty) {
           return Container(
+            width: double.infinity,
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(12)),
             child: Column(
@@ -296,7 +352,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
       child: InkWell(
         onTap: () {
           launchUrl(Uri.parse(url));
-          MixpanelManager().pageOpened('$label Docs');
+          PlatformManager.instance.analytics.pageOpened('$label Docs');
         },
         borderRadius: BorderRadius.circular(20),
         child: Padding(
@@ -315,7 +371,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), borderRadius: BorderRadius.circular(20)),
+        decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(20)),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -331,33 +387,6 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
     );
   }
 
-  void _showApiSwitchDialog(BuildContext context, String targetEnvironment) {
-    final targetName = targetEnvironment == 'production' ? context.l10n.production : context.l10n.staging;
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1C1C1E),
-        title: Text(context.l10n.switchApiConfirmTitle, style: const TextStyle(color: Colors.white)),
-        content: Text(context.l10n.switchApiConfirmBody(targetName), style: const TextStyle(color: Colors.white70)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text(context.l10n.cancel, style: const TextStyle(color: Colors.grey)),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.of(ctx).pop();
-              await SharedPreferencesUtil().saveString('testFlightApiEnvironment', targetEnvironment);
-              AppSnackbar.showSnackbar(context.l10n.apiEnvSavedRestartRequired, duration: const Duration(seconds: 5));
-            },
-            child: Text(context.l10n.switchAndRestart, style: const TextStyle(color: Colors.orange)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
   Widget _buildManualFirmwareFlash(DeviceProvider provider) {
     return _buildSectionContainer(
       children: [
@@ -405,6 +434,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
     );
   }
 
+  @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
@@ -443,82 +473,31 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Persona Section
-                  GestureDetector(
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (context) => const PersonaProfilePage(),
-                          settings: const RouteSettings(arguments: 'from_settings'),
-                        ),
-                      );
-                      MixpanelManager().pageOpened('Developer Persona Settings');
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1C1C1E),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 40,
-                            height: 40,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF2A2A2E),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Center(
-                              child: FaIcon(FontAwesomeIcons.solidCircleUser, color: Colors.grey.shade400, size: 16),
-                            ),
-                          ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Text(
-                                      context.l10n.persona,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: Colors.orange.withOpacity(0.2),
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: Text(
-                                        context.l10n.beta,
-                                        style: const TextStyle(
-                                          color: Colors.orange,
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w600,
-                                          letterSpacing: 0.5,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  context.l10n.configureAiPersona,
-                                  style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
-                                ),
-                              ],
-                            ),
-                          ),
-                          FaIcon(FontAwesomeIcons.chevronRight, color: Colors.grey.shade600, size: 14),
-                        ],
-                      ),
-                    ),
+                  // Payment Methods
+                  _buildNavItem(
+                    icon: FontAwesomeIcons.solidCreditCard,
+                    title: context.l10n.paymentMethods,
+                    onTap: () =>
+                        Navigator.of(context).push(MaterialPageRoute(builder: (context) => const PaymentsPage())),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Conversation Display
+                  _buildNavItem(
+                    icon: FontAwesomeIcons.list,
+                    title: context.l10n.conversationDisplay,
+                    onTap: () => Navigator.of(
+                      context,
+                    ).push(MaterialPageRoute(builder: (context) => const ConversationDisplaySettings())),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Data Privacy
+                  _buildNavItem(
+                    icon: FontAwesomeIcons.shield,
+                    title: context.l10n.dataPrivacy,
+                    onTap: () =>
+                        Navigator.of(context).push(MaterialPageRoute(builder: (context) => const DataPrivacyPage())),
                   ),
                   const SizedBox(height: 12),
 
@@ -731,7 +710,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                                 await DebugLogManager.setEnabled(v);
                                 setState(() {});
                               },
-                              activeColor: const Color(0xFF22C55E),
+                              activeThumbColor: const Color(0xFF22C55E),
                             ),
                           ],
                         ),
@@ -746,20 +725,24 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                                   onTap: () async {
                                     final files = await DebugLogManager.listLogFiles();
                                     if (files.isEmpty) {
-                                      AppSnackbar.showSnackbarError(context.l10n.noLogFilesFound);
+                                      if (context.mounted) {
+                                        AppSnackbar.showSnackbarError(context.l10n.noLogFilesFound);
+                                      }
                                       return;
                                     }
                                     if (files.length == 1) {
-                                      final result = await Share.shareXFiles([
-                                        XFile(files.first.path),
-                                      ], text: 'Omi debug log');
+                                      final result = await Share.shareXFiles(
+                                        [XFile(files.first.path)],
+                                        text: 'Omi debug log',
+                                        sharePositionOrigin: _shareOrigin(),
+                                      );
                                       if (result.status == ShareResultStatus.success) {
                                         Logger.debug('Log shared');
                                       }
                                       return;
                                     }
 
-                                    if (!mounted) return;
+                                    if (!context.mounted) return;
                                     final selected = await showModalBottomSheet<File>(
                                       context: context,
                                       backgroundColor: const Color(0xFF1C1C1E),
@@ -819,9 +802,11 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                                     );
 
                                     if (selected != null) {
-                                      final result = await Share.shareXFiles([
-                                        XFile(selected.path),
-                                      ], text: 'Omi debug log');
+                                      final result = await Share.shareXFiles(
+                                        [XFile(selected.path)],
+                                        text: 'Omi debug log',
+                                        sharePositionOrigin: _shareOrigin(),
+                                      );
                                       if (result.status == ShareResultStatus.success) {
                                         Logger.debug('Log shared');
                                       }
@@ -854,13 +839,15 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                               const SizedBox(width: 12),
                               GestureDetector(
                                 onTap: () async {
+                                  final message = context.l10n.debugLogCleared;
                                   await DebugLogManager.clear();
-                                  AppSnackbar.showSnackbar(context.l10n.debugLogCleared);
+                                  if (!context.mounted) return;
+                                  AppSnackbar.showSnackbar(message);
                                 },
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
                                   decoration: BoxDecoration(
-                                    color: Colors.red.withOpacity(0.15),
+                                    color: Colors.red.withValues(alpha: 0.15),
                                     borderRadius: BorderRadius.circular(10),
                                   ),
                                   child: Row(
@@ -891,6 +878,8 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                         ? null
                         : () async {
                             if (provider.loadingExportMemories) return;
+                            // Capture l10n before async gaps
+                            final exportTitle = context.l10n.exportAllData;
                             setState(() => provider.loadingExportMemories = true);
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
@@ -902,23 +891,30 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                             final filePath = '${directory.path}/omi-export.json';
                             final exportedPath = await exportUserDataToFile(filePath);
                             if (exportedPath == null) {
+                              // Always reset the flag so the button is re-enabled even if widget is unmounted
+                              provider.loadingExportMemories = false;
                               if (context.mounted) {
                                 ScaffoldMessenger.of(
                                   context,
                                 ).showSnackBar(const SnackBar(content: Text('Export failed. Please try again.')));
+                                setState(() {});
                               }
-                              setState(() => provider.loadingExportMemories = false);
                               return;
                             }
 
-                            final result = await Share.shareXFiles([
-                              XFile(exportedPath),
-                            ], text: 'Exported Data from Omi');
+                            final result = await Share.shareXFiles(
+                              [XFile(exportedPath)],
+                              subject: exportTitle,
+                              text: exportTitle,
+                              sharePositionOrigin: _shareOrigin(),
+                            );
                             if (result.status == ShareResultStatus.success) {
                               Logger.debug('Export shared');
                             }
-                            MixpanelManager().exportMemories();
-                            setState(() => provider.loadingExportMemories = false);
+                            PlatformManager.instance.analytics.exportMemories();
+                            // Always reset the flag so the button is re-enabled even if widget is unmounted
+                            provider.loadingExportMemories = false;
+                            if (mounted) setState(() {});
                           },
                     child: Container(
                       padding: const EdgeInsets.all(16),
@@ -1001,9 +997,13 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                                 try {
                                   // Call delete endpoint
                                   await KnowledgeGraphApi.deleteKnowledgeGraph();
-                                  AppSnackbar.showSnackbar(context.l10n.knowledgeGraphDeletedSuccessfully);
+                                  if (context.mounted) {
+                                    AppSnackbar.showSnackbar(context.l10n.knowledgeGraphDeletedSuccessfully);
+                                  }
                                 } catch (e) {
-                                  AppSnackbar.showSnackbarError(context.l10n.failedToDeleteGraph(e.toString()));
+                                  if (context.mounted) {
+                                    AppSnackbar.showSnackbarError(context.l10n.failedToDeleteGraph(e.toString()));
+                                  }
                                 }
                               },
                               child: Text(context.l10n.delete, style: const TextStyle(color: Colors.redAccent)),
@@ -1588,54 +1588,6 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                           padding: const EdgeInsets.symmetric(vertical: 16),
                           child: Divider(color: Colors.grey.shade800, height: 1),
                         ),
-                        // Follow-up Questions
-                        _buildExperimentalItem(
-                          title: context.l10n.followUpQuestions,
-                          description: context.l10n.suggestQuestionsAfterConversations,
-                          icon: FontAwesomeIcons.lightbulb,
-                          value: provider.followUpQuestionEnabled,
-                          onChanged: provider.onFollowUpQuestionChanged,
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          child: Divider(color: Colors.grey.shade800, height: 1),
-                        ),
-                        // Goal Tracker
-                        _buildExperimentalItem(
-                          title: context.l10n.goalTracker,
-                          description: context.l10n.trackYourGoalsOnHomepage,
-                          icon: FontAwesomeIcons.bullseye,
-                          value: provider.showGoalTrackerEnabled,
-                          onChanged: provider.onShowGoalTrackerChanged,
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          child: Divider(color: Colors.grey.shade800, height: 1),
-                        ),
-                        // Daily Score
-                        _buildExperimentalItem(
-                          title: context.l10n.dailyScore,
-                          description: context.l10n.showDailyScoreOnHomepage,
-                          icon: FontAwesomeIcons.chartLine,
-                          value: provider.showDailyScoreEnabled,
-                          onChanged: provider.onShowDailyScoreChanged,
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          child: Divider(color: Colors.grey.shade800, height: 1),
-                        ),
-                        // Tasks
-                        _buildExperimentalItem(
-                          title: context.l10n.tasks,
-                          description: context.l10n.showTasksOnHomepage,
-                          icon: FontAwesomeIcons.listCheck,
-                          value: provider.showTasksEnabled,
-                          onChanged: provider.onShowTasksChanged,
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          child: Divider(color: Colors.grey.shade800, height: 1),
-                        ),
                         // VAD Gate
                         _buildExperimentalItem(
                           title: 'VAD Gate',
@@ -1681,7 +1633,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                                         decoration: BoxDecoration(
-                                          color: Colors.purple.withOpacity(0.2),
+                                          color: Colors.purple.withValues(alpha: 0.2),
                                           borderRadius: BorderRadius.circular(10),
                                         ),
                                         child: const Text(
@@ -1714,7 +1666,7 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                               Switch(
                                 value: provider.claudeAgentEnabled,
                                 onChanged: (v) => provider.onClaudeAgentChanged(v),
-                                activeColor: const Color(0xFF22C55E),
+                                activeThumbColor: const Color(0xFF22C55E),
                               ),
                           ],
                         ),
@@ -1722,167 +1674,84 @@ class _DeveloperSettingsPageState extends State<DeveloperSettingsPage> {
                     ),
                   ),
 
-                  // API Environment Section (TestFlight only, requires STAGING_API_URL env var)
-                  if (Env.isTestFlight && Env.isStagingConfigured) ...[
-                    const SizedBox(height: 32),
-                    _buildSectionHeader(context.l10n.apiEnvironment, subtitle: context.l10n.apiEnvironmentDescription),
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1C1C1E),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF2A2A2E),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: GestureDetector(
-                                    onTap: () {
-                                      if (!SharedPreferencesUtil().testFlightUseStagingApi) return;
-                                      _showApiSwitchDialog(context, 'production');
-                                    },
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      decoration: BoxDecoration(
-                                        color: !SharedPreferencesUtil().testFlightUseStagingApi
-                                            ? const Color(0xFF22C55E)
-                                            : Colors.transparent,
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: Column(
-                                        children: [
-                                          Text(
-                                            context.l10n.production,
-                                            style: TextStyle(
-                                              color: !SharedPreferencesUtil().testFlightUseStagingApi
-                                                  ? Colors.white
-                                                  : Colors.grey.shade400,
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            'api.omi.me',
-                                            style: TextStyle(
-                                              color: !SharedPreferencesUtil().testFlightUseStagingApi
-                                                  ? Colors.white70
-                                                  : Colors.grey.shade600,
-                                              fontSize: 11,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                Expanded(
-                                  child: GestureDetector(
-                                    onTap: () {
-                                      if (SharedPreferencesUtil().testFlightUseStagingApi) return;
-                                      _showApiSwitchDialog(context, 'staging');
-                                    },
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(vertical: 12),
-                                      decoration: BoxDecoration(
-                                        color: SharedPreferencesUtil().testFlightUseStagingApi
-                                            ? Colors.orange.shade800
-                                            : Colors.transparent,
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: Column(
-                                        children: [
-                                          Text(
-                                            context.l10n.staging,
-                                            style: TextStyle(
-                                              color: SharedPreferencesUtil().testFlightUseStagingApi
-                                                  ? Colors.white
-                                                  : Colors.grey.shade400,
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            Uri.parse(Env.stagingApiUrl!).host,
-                                            style: TextStyle(
-                                              color: SharedPreferencesUtil().testFlightUseStagingApi
-                                                  ? Colors.white70
-                                                  : Colors.grey.shade600,
-                                              fontSize: 11,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              FaIcon(FontAwesomeIcons.circleInfo, color: Colors.grey.shade600, size: 12),
-                              const SizedBox(width: 6),
-                              Text(
-                                context.l10n.switchRequiresRestart,
-                                style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
+                  // Home Screen Section
+                  const SizedBox(height: 32),
+                  const Padding(
+                    padding: EdgeInsets.only(left: 4, right: 4, bottom: 12),
+                    child: Text(
+                      'Home Screen',
+                      style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w600),
                     ),
-                    if (SharedPreferencesUtil().testFlightUseStagingApi) ...[
-                      const SizedBox(height: 8),
-                      Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 4),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.orange.shade900.withValues(alpha: 0.3),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.orange.shade700.withValues(alpha: 0.5)),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(14)),
+                    child: Column(
+                      children: [
+                        _buildExperimentalItem(
+                          title: context.l10n.goalTracker,
+                          description: context.l10n.trackYourGoalsOnHomepage,
+                          icon: FontAwesomeIcons.bullseye,
+                          value: provider.showGoalTrackerEnabled,
+                          onChanged: provider.onShowGoalTrackerChanged,
                         ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.warning_amber_rounded, color: Colors.orange.shade300, size: 20),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                context.l10n.stagingDisclaimer,
-                                style: TextStyle(color: Colors.orange.shade300, fontSize: 12),
-                              ),
-                            ),
-                          ],
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          child: Divider(color: Colors.grey.shade800, height: 1),
                         ),
-                      ),
-                    ],
-                  ],
+                        _buildExperimentalItem(
+                          title: context.l10n.dailyScore,
+                          description: context.l10n.showDailyScoreOnHomepage,
+                          icon: FontAwesomeIcons.chartLine,
+                          value: provider.showDailyScoreEnabled,
+                          onChanged: provider.onShowDailyScoreChanged,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          child: Divider(color: Colors.grey.shade800, height: 1),
+                        ),
+                        _buildExperimentalItem(
+                          title: context.l10n.tasks,
+                          description: context.l10n.showTasksOnHomepage,
+                          icon: FontAwesomeIcons.listCheck,
+                          value: provider.showTasksEnabled,
+                          onChanged: provider.onShowTasksChanged,
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          child: Divider(color: Colors.grey.shade800, height: 1),
+                        ),
+                        _buildExperimentalItem(
+                          title: context.l10n.showPhoneCallButtonTitle,
+                          description: context.l10n.showPhoneCallButtonDesc,
+                          icon: FontAwesomeIcons.phone,
+                          value: provider.showPhoneCallButton,
+                          onChanged: provider.onShowPhoneCallButtonChanged,
+                        ),
+                      ],
+                    ),
+                  ),
 
                   // Manual Firmware Flash (only when device connected)
-                  Builder(builder: (context) {
-                    final deviceProvider = context.watch<DeviceProvider>();
-                    if (deviceProvider.isConnected && deviceProvider.pairedDevice != null) {
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 24),
-                          _buildSectionHeader('Firmware', subtitle: 'Flash custom firmware builds'),
-                          const SizedBox(height: 8),
-                          _buildManualFirmwareFlash(deviceProvider),
-                        ],
-                      );
-                    }
-                    return const SizedBox.shrink();
-                  }),
+                  Builder(
+                    builder: (context) {
+                      final deviceProvider = context.watch<DeviceProvider>();
+                      if (FirmwareUpdateBuildPolicy.current.allowsOmiFirmwareUpdate &&
+                          deviceProvider.isConnected &&
+                          deviceProvider.pairedDevice != null) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const SizedBox(height: 24),
+                            _buildSectionHeader('Firmware', subtitle: 'Flash custom firmware builds'),
+                            const SizedBox(height: 8),
+                            _buildManualFirmwareFlash(deviceProvider),
+                          ],
+                        );
+                      }
+                      return const SizedBox.shrink();
+                    },
+                  ),
 
                   const SizedBox(height: 48),
                 ],
@@ -1904,11 +1773,7 @@ class _ManualFirmwareFlashPage extends StatefulWidget {
   final String fileName;
   final BtDevice device;
 
-  const _ManualFirmwareFlashPage({
-    required this.zipFilePath,
-    required this.fileName,
-    required this.device,
-  });
+  const _ManualFirmwareFlashPage({required this.zipFilePath, required this.fileName, required this.device});
 
   @override
   State<_ManualFirmwareFlashPage> createState() => _ManualFirmwareFlashPageState();
@@ -1951,7 +1816,7 @@ class _ManualFirmwareFlashPageState extends State<_ManualFirmwareFlashPage> with
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title: const Text('Flash Firmware', style: TextStyle(color: Colors.white)),
+        title: Text(context.l10n.flashFirmware, style: const TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
         elevation: 0,
       ),
@@ -1963,10 +1828,7 @@ class _ManualFirmwareFlashPageState extends State<_ManualFirmwareFlashPage> with
             // File info
             Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1C1C1E),
-                borderRadius: BorderRadius.circular(12),
-              ),
+              decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(12)),
               child: Row(
                 children: [
                   const FaIcon(FontAwesomeIcons.file, color: Colors.deepPurple, size: 20),
@@ -1975,11 +1837,15 @@ class _ManualFirmwareFlashPageState extends State<_ManualFirmwareFlashPage> with
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(widget.fileName,
-                            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+                        Text(
+                          widget.fileName,
+                          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                        ),
                         const SizedBox(height: 4),
-                        Text('Target: ${widget.device.name}',
-                            style: TextStyle(color: Colors.grey.shade400, fontSize: 13)),
+                        Text(
+                          'Target: ${widget.device.name}',
+                          style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+                        ),
                       ],
                     ),
                   ),
@@ -2020,8 +1886,10 @@ class _ManualFirmwareFlashPageState extends State<_ManualFirmwareFlashPage> with
                     backgroundColor: Colors.deepPurple,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  child: const Text('Flash Firmware',
-                      style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+                  child: Text(
+                    context.l10n.flashFirmware,
+                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ),
             ],
@@ -2053,8 +1921,10 @@ class _ManualFirmwareFlashPageState extends State<_ManualFirmwareFlashPage> with
                   children: [
                     Icon(Icons.check_circle, color: Colors.green, size: 64),
                     SizedBox(height: 16),
-                    Text('Firmware flashed successfully!',
-                        style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600)),
+                    Text(
+                      'Firmware flashed successfully!',
+                      style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+                    ),
                     SizedBox(height: 8),
                     Text('Your device will restart.', style: TextStyle(color: Colors.grey, fontSize: 14)),
                   ],

@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/material.dart';
-
 import 'package:omi/backend/preferences.dart';
 import 'package:omi/backend/schema/bt_device/bt_device.dart';
 import 'package:omi/backend/schema/message_event.dart';
@@ -11,12 +9,12 @@ import 'package:omi/backend/schema/transcript_segment.dart';
 import 'package:omi/env/env.dart';
 import 'package:omi/models/custom_stt_config.dart';
 import 'package:omi/models/stt_provider.dart';
-import 'package:omi/services/notifications.dart';
 import 'package:omi/services/sockets/on_device_apple_provider.dart';
 import 'package:omi/services/sockets/on_device_whisper_provider.dart';
 import 'package:omi/services/sockets/pure_socket.dart';
 import 'package:omi/services/sockets/transcription_service.dart';
 import 'package:omi/utils/debug_log_manager.dart';
+import 'package:omi/utils/hard_secret_detector.dart';
 import 'package:omi/utils/logger.dart';
 
 export 'package:omi/utils/audio/audio_transcoder.dart';
@@ -62,7 +60,7 @@ class ConversationTranscriptSegmentSocketService extends TranscriptSegmentSocket
 
 class CustomSttTranscriptSegmentSocketService extends TranscriptSegmentSocketService {
   CustomSttTranscriptSegmentSocketService.create(super.sampleRate, super.codec, super.language, {super.source})
-    : super.create(includeSpeechProfile: true, customSttMode: true);
+      : super.create(includeSpeechProfile: true, customSttMode: true);
 }
 
 enum SocketServiceState { connected, disconnected }
@@ -97,8 +95,7 @@ class TranscriptSegmentSocketService implements IPureSocketListener {
     this.sttConfigId,
     this.onboardingMode = false,
   }) {
-    var params =
-        '?language=$language&sample_rate=$sampleRate&codec=$codec&uid=${SharedPreferencesUtil().uid}'
+    var params = '?language=$language&sample_rate=$sampleRate&codec=$codec&uid=${SharedPreferencesUtil().uid}'
         '&include_speech_profile=$includeSpeechProfile&stt_service=${SharedPreferencesUtil().transcriptionModel}'
         '&conversation_timeout=${SharedPreferencesUtil().conversationSilenceDuration}';
 
@@ -116,6 +113,11 @@ class TranscriptSegmentSocketService implements IPureSocketListener {
 
     // Enable server-side speaker auto-assignment (backward compatibility flag)
     params += '&speaker_auto_assign=enabled';
+
+    // Whether the backend may auto-create a new person when it detects a name.
+    // Mirrors the user's "Auto-create Speakers" setting; a detected name with no
+    // existing match is still surfaced for manual tagging when this is off.
+    params += '&create_speakers=${SharedPreferencesUtil().autoCreateSpeakersEnabled}';
 
     if (SharedPreferencesUtil().vadGateEnabled) {
       params += '&vad_gate=enabled';
@@ -218,7 +220,7 @@ class TranscriptSegmentSocketService implements IPureSocketListener {
 
     // Transcript segments
     if (jsonEvent is List) {
-      var segments = jsonEvent;
+      var segments = _dropSecretSegments(jsonEvent);
       if (segments.isEmpty) {
         return;
       }
@@ -239,6 +241,33 @@ class TranscriptSegmentSocketService implements IPureSocketListener {
 
     Logger.debug(event.toString());
     DebugLogManager.logInfo('transcription_socket_unhandled_message: ${event.toString()}');
+  }
+
+  List<dynamic> _dropSecretSegments(List<dynamic> segments) {
+    final kept = <dynamic>[];
+    final categories = <String>{};
+    var droppedCount = 0;
+    for (final segment in segments) {
+      final text = segment is Map ? segment['text']?.toString() : null;
+      if (text != null && HardSecretDetector.contains(text)) {
+        categories.addAll(HardSecretDetector.categories(text));
+        droppedCount += 1;
+        continue;
+      }
+      kept.add(segment);
+    }
+    if (droppedCount > 0) {
+      final sortedCategories = categories.toList()..sort();
+      unawaited(
+        DebugLogManager.logEvent('hard_secret_artifact_dropped', {
+          'source': 'transcription_socket',
+          'artifact_type': 'transcript_segment',
+          'dropped_count': droppedCount,
+          'categories': sortedCategories,
+        }),
+      );
+    }
+    return kept;
   }
 
   @override
@@ -345,9 +374,8 @@ class TranscriptSocketServiceFactory {
     if (config.provider == SttProvider.geminiLive) {
       return GeminiStreamingSttSocket(
         apiKey: config.apiKey ?? '',
-        model: config.effectiveModel.isNotEmpty
-            ? config.effectiveModel
-            : 'gemini-2.5-flash-native-audio-preview-12-2025',
+        model:
+            config.effectiveModel.isNotEmpty ? config.effectiveModel : 'gemini-2.5-flash-native-audio-preview-12-2025',
         language: config.effectiveLanguage,
         sampleRate: sampleRate,
         transcoder: transcoder,
@@ -357,12 +385,10 @@ class TranscriptSocketServiceFactory {
     // Deepgram Live and other streaming providers
     final requestConfig = config.requestConfig;
     final url = requestConfig['url'] ?? config.effectiveUrl;
-    final headers = requestConfig['headers'] != null
-        ? Map<String, String>.from(requestConfig['headers'])
-        : (config.headers ?? {});
-    final params = requestConfig['params'] != null
-        ? Map<String, String>.from(requestConfig['params'])
-        : (config.params ?? {});
+    final headers =
+        requestConfig['headers'] != null ? Map<String, String>.from(requestConfig['headers']) : (config.headers ?? {});
+    final params =
+        requestConfig['params'] != null ? Map<String, String>.from(requestConfig['params']) : (config.params ?? {});
 
     // Build WebSocket URL with query params
     final wsUrl = _buildUrlWithParams(url, params);
@@ -386,12 +412,10 @@ class TranscriptSocketServiceFactory {
 
     final requestConfig = config.requestConfig;
     final url = requestConfig['url'] ?? config.effectiveUrl;
-    final headers = requestConfig['headers'] != null
-        ? Map<String, String>.from(requestConfig['headers'])
-        : (config.headers ?? {});
-    final params = requestConfig['params'] != null
-        ? Map<String, String>.from(requestConfig['params'])
-        : (config.params ?? {});
+    final headers =
+        requestConfig['headers'] != null ? Map<String, String>.from(requestConfig['headers']) : (config.headers ?? {});
+    final params =
+        requestConfig['params'] != null ? Map<String, String>.from(requestConfig['params']) : (config.params ?? {});
     final audioFieldName = requestConfig['audio_field_name'] ?? config.audioFieldName ?? 'file';
     final requestType = config.effectiveRequestType;
 
@@ -448,9 +472,12 @@ class TranscriptSocketServiceFactory {
   /// Build URL with query parameters
   static String _buildUrlWithParams(String baseUrl, Map<String, String> params) {
     if (params.isEmpty) return baseUrl;
-    final uri = Uri.parse(baseUrl);
-    final newUri = uri.replace(queryParameters: {...uri.queryParameters, ...params});
-    return newUri.toString();
+    final uri = Uri.tryParse(baseUrl);
+    if (uri == null) {
+      Logger.warning('[STTFactory] Invalid URL, cannot append params: $baseUrl');
+      return baseUrl;
+    }
+    return uri.replace(queryParameters: {...uri.queryParameters, ...params}).toString();
   }
 
   /// Create composite service: primary STT socket + Omi backend for conversation processing

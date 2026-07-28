@@ -13,12 +13,17 @@ import 'package:omi/app_globals.dart';
 import 'package:omi/pages/home/firmware_update.dart';
 import 'package:omi/pages/home/omiglass_ota_update.dart';
 import 'package:omi/providers/capture_provider.dart';
+import 'package:omi/providers/local_recordings_provider.dart';
 import 'package:omi/services/devices.dart';
+import 'package:omi/services/devices/connectors/device_connection.dart';
+import 'package:omi/services/devices/connectors/omi_connection.dart';
 import 'package:omi/services/notifications.dart';
 import 'package:omi/services/services.dart';
 import 'package:omi/services/battery_widget_service.dart';
-import 'package:omi/utils/analytics/mixpanel.dart';
+import 'package:omi/services/wals/wal_syncs.dart';
+import 'package:omi/services/wals/recording_transfer_coordinator.dart';
 import 'package:omi/utils/device.dart';
+import 'package:omi/utils/firmware_update_build_policy.dart';
 import 'package:omi/utils/logger.dart';
 import 'package:omi/utils/other/debouncer.dart';
 import 'package:omi/utils/platform/platform_manager.dart';
@@ -26,20 +31,32 @@ import 'package:omi/widgets/confirmation_dialog.dart';
 
 class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption {
   CaptureProvider? captureProvider;
+  LocalRecordingsProvider? localRecordingsProvider;
 
   bool isConnecting = false;
   bool isConnected = false;
   bool isDeviceStorageSupport = false;
   bool supportsMultiFileSync = SharedPreferencesUtil().deviceSupportsMultiFileSync;
+
+  // Latest on-device ring-buffer storage snapshot (firmware 3.0.20+ only).
+  // Surfaced on the Auto Sync page as a storage-usage indicator. Null when the
+  // device predates the ring protocol or hasn't been read yet.
+  RingStatus? _ringStatus;
+  RingStatus? get ringStatus => _ringStatus;
+
   BtDevice? connectedDevice;
   BtDevice? pairedDevice;
   StreamSubscription<List<int>>? _bleBatteryLevelListener;
+  StreamSubscription? _bleChargingStatusListener;
   int batteryLevel = -1;
+  bool isCharging = false;
   int _lastNotifiedBatteryLevel = -1;
   DateTime? _lastBatteryNotifyTime;
   bool _hasLowBatteryAlerted = false;
+  bool _hasFullyChargedAlerted = false;
   bool _havingNewFirmware = false;
-  bool get havingNewFirmware => _havingNewFirmware && pairedDevice != null && isConnected;
+  bool get havingNewFirmware =>
+      _havingNewFirmware && pairedDevice != null && isConnected && _allowsFirmwareUpdateForPairedDevice;
 
   // Track firmware update state to prevent showing dialog during updates
   bool _isCheckingFirmware = false;
@@ -60,9 +77,7 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
   Map<String, dynamic> _latestOmiGlassFirmwareDetails = {};
   Map<String, dynamic> get latestOmiGlassFirmwareDetails => _latestOmiGlassFirmwareDetails;
 
-  Timer? _disconnectNotificationTimer;
   Timer? _discoveryTimer;
-  bool _manualDisconnect = false;
   final Debouncer _disconnectDebouncer = Debouncer(delay: const Duration(milliseconds: 500));
   final Debouncer _connectDebouncer = Debouncer(delay: const Duration(milliseconds: 100));
 
@@ -73,8 +88,9 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
     ServiceManager.instance().device.subscribe(this, this);
   }
 
-  void setProviders(CaptureProvider provider) {
+  void setProviders(CaptureProvider provider, LocalRecordingsProvider recordingsProvider) {
     captureProvider = provider;
+    localRecordingsProvider = recordingsProvider;
     notifyListeners();
   }
 
@@ -106,7 +122,6 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
   }
 
   Future _bleDisconnectDevice(BtDevice btDevice) async {
-    _manualDisconnect = true;
     await ServiceManager.instance().device.disconnectDevice();
   }
 
@@ -139,15 +154,6 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
     return connection.getStorageList();
   }
 
-  Future<BtDevice?> _getConnectedDevice() async {
-    var deviceId = SharedPreferencesUtil().btDevice.id;
-    if (deviceId.isEmpty) {
-      return null;
-    }
-    var connection = await ServiceManager.instance().device.ensureConnection(deviceId);
-    return connection?.device;
-  }
-
   initiateBleBatteryListener() async {
     if (connectedDevice == null) {
       return;
@@ -168,10 +174,20 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
           final ctx = globalNavigatorKey.currentContext;
           NotificationService.instance.createNotification(
             title: ctx?.l10n.lowBatteryAlertTitle ?? "Low Battery Alert",
-            body: ctx?.l10n.lowBatteryAlertBody ?? "Your device is running low on battery. Time for a recharge! 🔋",
+            body: ctx?.l10n.lowBatteryAlertBody(value) ?? "Your battery is at $value%. Time for a recharge! 🔋",
           );
         } else if (batteryLevel > 20) {
           _hasLowBatteryAlerted = false;
+        }
+        if (isCharging && batteryLevel >= 100 && !_hasFullyChargedAlerted) {
+          _hasFullyChargedAlerted = true;
+          final ctx = globalNavigatorKey.currentContext;
+          NotificationService.instance.createNotification(
+            title: ctx?.l10n.batteryFullyChargedTitle ?? "Omi is fully charged",
+            body: ctx?.l10n.batteryFullyChargedBody ?? "Your Omi device is fully charged. Feel free to unplug!",
+          );
+        } else if (!isCharging || batteryLevel < 100) {
+          _hasFullyChargedAlerted = false;
         }
         // Throttle notifyListeners to reduce battery drain from excessive UI rebuilds
         // Only notify when: first reading, >=5% change, 15min elapsed, or crosses 20% threshold
@@ -191,6 +207,40 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
       },
     );
     notifyListeners();
+  }
+
+  Future<void> initiateChargingStatusListener() async {
+    if (connectedDevice == null) return;
+    _bleChargingStatusListener?.cancel();
+
+    var connection = await ServiceManager.instance().device.ensureConnection(connectedDevice!.id);
+    if (connection == null) return;
+    if (connection is! OmiDeviceConnection) return;
+
+    final currentStatus = await connection.readChargingStatus();
+    if (isCharging != currentStatus) {
+      isCharging = currentStatus;
+      notifyListeners();
+    }
+
+    _bleChargingStatusListener = await connection.getChargingStatusListener(
+      onChargingStatusChange: (bool charging) {
+        if (isCharging != charging) {
+          isCharging = charging;
+          if (!charging) {
+            _hasFullyChargedAlerted = false;
+          } else if (batteryLevel >= 100 && !_hasFullyChargedAlerted) {
+            _hasFullyChargedAlerted = true;
+            final ctx = globalNavigatorKey.currentContext;
+            NotificationService.instance.createNotification(
+              title: ctx?.l10n.batteryFullyChargedTitle ?? "Omi is fully charged",
+              body: ctx?.l10n.batteryFullyChargedBody ?? "Your Omi device is fully charged. Feel free to unplug!",
+            );
+          }
+          notifyListeners();
+        }
+      },
+    );
   }
 
   /// Updates battery level with throttling logic. Returns true if notifyListeners was called.
@@ -264,7 +314,7 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
       return;
     }
     final deviceService = ServiceManager.instance().device;
-    if (deviceService is DeviceService && deviceService.status == DeviceServiceStatus.ready) {
+    if (deviceService.status == DeviceServiceStatus.ready) {
       try {
         await deviceService.discover();
       } catch (e) {
@@ -292,7 +342,7 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
         await setConnectedDevice(connection.device);
         setisDeviceStorageSupport();
         SharedPreferencesUtil().deviceName = connection.device.name;
-        MixpanelManager().deviceConnected();
+        PlatformManager.instance.analytics.deviceConnected();
         setIsConnected(true);
       }
     } catch (e) {
@@ -319,6 +369,7 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
   @override
   void dispose() {
     _bleBatteryLevelListener?.cancel();
+    _bleChargingStatusListener?.cancel();
     _discoveryTimer?.cancel();
     _disconnectDebouncer.cancel();
     _connectDebouncer.cancel();
@@ -330,6 +381,8 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
     Logger.debug('onDisconnected inside: $connectedDevice');
     _havingNewFirmware = false;
     _isFirmwareDialogShowing = false;
+    _bleChargingStatusListener?.cancel();
+    isCharging = false;
     setConnectedDevice(null);
     setisDeviceStorageSupport();
     setIsConnected(false);
@@ -337,13 +390,20 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
 
     captureProvider?.updateRecordingDevice(null);
 
+    // Batch mode: the native writer finalizes the in-progress recording on
+    // disconnect (.bin.part -> .bin). Rescan shortly after the rename completes
+    // so the new recording shows up in the conversations list.
+    Future.delayed(const Duration(seconds: 1), () {
+      localRecordingsProvider?.refresh();
+    });
+
     // Wals
     ServiceManager.instance().wal.getSyncs().sdcard.setDevice(null);
     ServiceManager.instance().wal.getSyncs().flashPage.setDevice(null);
 
     PlatformManager.instance.crashReporter.logInfo('Omi Device Disconnected');
 
-    MixpanelManager().deviceDisconnected();
+    PlatformManager.instance.analytics.deviceDisconnected();
     BatteryWidgetService().updateBatteryInfo(
       deviceName: SharedPreferencesUtil().deviceName,
       batteryLevel: -1,
@@ -351,21 +411,8 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
       isConnected: false,
     );
 
-    if (_manualDisconnect) {
-      _manualDisconnect = false;
-      _disconnectNotificationTimer?.cancel();
-      return;
-    }
-
-    // Show a notification if still disconnected after 30 seconds.
-    _disconnectNotificationTimer?.cancel();
-    _disconnectNotificationTimer = Timer(const Duration(seconds: 30), () {
-      final ctx = globalNavigatorKey.currentContext;
-      NotificationService.instance.createNotification(
-        title: ctx?.l10n.deviceDisconnectedNotificationTitle ?? 'Your Omi Device Disconnected',
-        body: ctx?.l10n.deviceDisconnectedNotificationBody ?? 'Please reconnect to continue using your Omi.',
-      );
-    });
+    // Notify interactive device onboarding of disconnect
+    captureProvider?.deviceOnboardingProvider?.onDeviceDisconnected();
   }
 
   Future<(String, bool, String, Map)> shouldUpdateFirmware() async {
@@ -374,6 +421,12 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
     }
 
     var device = pairedDevice!;
+    if (device.firmwareRevision.isEmpty) {
+      // BLE read of the firmware-revision characteristic failed. Skip the
+      // upgrade check rather than asking the backend what's "newer than
+      // unknown" — that path returns a misleading legacy version.
+      return ('Unable to determine current firmware version', false, '', {});
+    }
     var latestFirmwareDetails = await getLatestFirmwareVersion(
       deviceModelNumber: device.modelNumber,
       firmwareRevision: device.firmwareRevision,
@@ -390,8 +443,6 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
 
   void _onDeviceConnected(BtDevice device) async {
     Logger.debug('_onConnected inside: $connectedDevice');
-    _disconnectNotificationTimer?.cancel();
-    NotificationService.instance.clearNotification(1);
     setConnectedDevice(device);
 
     if (captureProvider != null) {
@@ -413,8 +464,9 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
       );
     }
 
-    // Then set up listener for battery changes
+    // Then set up listeners for battery changes and charging status
     await initiateBleBatteryListener();
+    await initiateChargingStatusListener();
     if (batteryLevel != -1 && batteryLevel < 20) {
       _hasLowBatteryAlerted = false;
     }
@@ -424,12 +476,22 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
     await getDeviceInfo();
     SharedPreferencesUtil().deviceName = device.name;
 
-    // Wals
-    ServiceManager.instance().wal.getSyncs().sdcard.setDevice(device);
-    ServiceManager.instance().wal.getSyncs().flashPage.setDevice(device);
-    ServiceManager.instance().wal.getSyncs().storage.setDevice(device);
+    // Wals — pass the firmware resolved by getDeviceInfo() above so background
+    // discovery routes ring-buffer devices correctly; `device` here is the raw
+    // connect object whose firmwareRevision is often still 'Unknown'.
+    final syncs = ServiceManager.instance().wal.getSyncs();
+    syncs.setDevice(device, firmwareVersion: currentFirmwareVersion);
+    syncs.sdcard.setDevice(device);
+    syncs.flashPage.setDevice(device);
+    syncs.storage.setDevice(device);
+    syncs.ring.setDevice(device);
 
-    // Auto-sync: check if device has offline files (new multi-file firmware)
+    // Device connection and inventory are a recovery wake, even when the
+    // home page is not mounted. The coordinator serializes it with every
+    // other foreground trigger and applies the auto-sync preference itself.
+    unawaited(RecordingTransferCoordinator.instance.wake(WakeTrigger.deviceConnected));
+
+    // Auto-sync: check if device has offline files
     _checkAndStartAutoSync(device);
 
     notifyListeners();
@@ -442,6 +504,9 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
     }
 
     onDeviceConnected?.call(device);
+
+    // Notify interactive device onboarding of reconnect
+    captureProvider?.deviceOnboardingProvider?.onDeviceReconnected();
   }
 
   /// Check firmware version to determine multi-file sync support.
@@ -462,7 +527,8 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
     try {
       // Use firmware version as the reliable signal for multi-file support
       // Read from pairedDevice which has firmwareRevision populated by getDeviceInfo()
-      supportsMultiFileSync = _isFirmwareVersionSupported(pairedDevice?.firmwareRevision ?? device.firmwareRevision);
+      final fwVersion = pairedDevice?.firmwareRevision ?? device.firmwareRevision;
+      supportsMultiFileSync = _isFirmwareVersionSupported(fwVersion);
       SharedPreferencesUtil().deviceSupportsMultiFileSync = supportsMultiFileSync;
       notifyListeners();
 
@@ -471,6 +537,23 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
       var connection = await ServiceManager.instance().device.ensureConnection(device.id);
       if (connection == null) return;
 
+      // fw >= 3.0.20 speaks the ring-buffer protocol; auto-detect via the 16-byte
+      // ring status read instead of the multi-file file-list endpoint (which the
+      // ring firmware no longer serves).
+      if (WalSyncs.isRingBufferFirmware(fwVersion)) {
+        final ringStatus = await connection.getRingStatus();
+        if (ringStatus != null) {
+          _ringStatus = ringStatus;
+          notifyListeners();
+        }
+        if (ringStatus == null || ringStatus.unreadPackets <= 0) return;
+        Logger.debug(
+          'DeviceProvider: Ring auto-sync detected ${ringStatus.unreadPackets} unread packets (${ringStatus.usedBytes} bytes)',
+        );
+        onOfflineDataDetected?.call(device, ringStatus.unreadPackets, ringStatus.usedBytes);
+        return;
+      }
+
       final status = await connection.getStorageFileStats();
       if (status == null || status.fileCount == 0) return;
 
@@ -478,6 +561,27 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
       onOfflineDataDetected?.call(device, status.fileCount, status.totalUsedBytes);
     } catch (e) {
       Logger.debug('DeviceProvider: Auto-sync check failed: $e');
+    }
+  }
+
+  /// Refresh the on-device ring-buffer storage snapshot for the storage-usage
+  /// indicator. No-op on firmware < 3.0.20 (the ring protocol isn't served) or
+  /// when there's no active connection. Safe to call from UI (e.g. on page open).
+  Future<void> refreshRingStorageStatus() async {
+    try {
+      final fwVersion = pairedDevice?.firmwareRevision ?? connectedDevice?.firmwareRevision;
+      if (!WalSyncs.isRingBufferFirmware(fwVersion)) return;
+      final deviceId = pairedDevice?.id ?? connectedDevice?.id;
+      if (deviceId == null) return;
+      final connection = await ServiceManager.instance().device.ensureConnection(deviceId);
+      if (connection == null) return;
+      final status = await connection.getRingStatus();
+      if (status != null) {
+        _ringStatus = status;
+        notifyListeners();
+      }
+    } catch (e) {
+      Logger.debug('DeviceProvider: refreshRingStorageStatus failed: $e');
     }
   }
 
@@ -515,6 +619,10 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
   }
 
   void _checkFirmwareUpdates() async {
+    if (!_allowsFirmwareUpdateForPairedDevice) {
+      _havingNewFirmware = false;
+      return;
+    }
     if (_isFirmwareUpdateInProgress || _isCheckingFirmware) {
       return;
     }
@@ -528,7 +636,7 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
         // Use a small delay to ensure the UI is ready
         Future.delayed(const Duration(milliseconds: 500), () {
           final context = globalNavigatorKey.currentContext;
-          if (context != null) {
+          if (context != null && context.mounted) {
             showFirmwareUpdateDialog(context);
           }
         });
@@ -538,14 +646,16 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
     }
   }
 
-  bool get _isOmiGlassDevice {
-    if (pairedDevice == null) return false;
-    if (pairedDevice!.type == DeviceType.openglass) return true;
-    final name = pairedDevice!.name.toLowerCase();
-    return name.contains('openglass') || name.contains('omiglass') || name.contains('glass');
-  }
+  bool get _isOmiGlassDevice => FirmwareUpdateBuildPolicy.current.isOpenGlassDevice(pairedDevice);
+
+  bool get _allowsFirmwareUpdateForPairedDevice =>
+      FirmwareUpdateBuildPolicy.current.allowsFirmwareUpdateForDevice(pairedDevice);
 
   Future checkFirmwareUpdates() async {
+    if (!_allowsFirmwareUpdateForPairedDevice) {
+      _havingNewFirmware = false;
+      return false;
+    }
     int retryCount = 0;
     const maxRetries = 3;
     const retryDelay = Duration(seconds: 3);
@@ -573,9 +683,7 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
 
         // Fetch latest stable version for rollback comparison
         try {
-          var stableDetails = await getStableFirmwareVersion(
-            deviceModelNumber: pairedDevice?.modelNumber ?? '',
-          );
+          var stableDetails = await getStableFirmwareVersion(deviceModelNumber: pairedDevice?.modelNumber ?? '');
           var stableVersion = stableDetails['version']?.toString() ?? '';
           if (stableVersion.startsWith('v')) stableVersion = stableVersion.substring(1);
           _latestStableFirmwareVersion = stableVersion;
@@ -609,7 +717,8 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
   }
 
   void showFirmwareUpdateDialog(BuildContext context) {
-    if (!_havingNewFirmware ||
+    if (!_allowsFirmwareUpdateForPairedDevice ||
+        !_havingNewFirmware ||
         !SharedPreferencesUtil().showFirmwareUpdateDialog ||
         _isFirmwareUpdateInProgress ||
         _isFirmwareDialogShowing ||
@@ -686,7 +795,7 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
   void onStatusChanged(DeviceServiceStatus status) {}
 
   prepareDFU() {
-    if (connectedDevice == null) {
+    if (!FirmwareUpdateBuildPolicy.current.allowsOmiFirmwareUpdate || connectedDevice == null) {
       return;
     }
     setFirmwareUpdateInProgress(true);

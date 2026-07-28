@@ -1,0 +1,55 @@
+version: 2
+name: memories
+tier: manual
+description: Memory menu — navigate full-width Memories, Conversations, and Brain Map destinations
+app: com.omi.computer-macos
+covers:
+  - desktop/macos/Desktop/Sources/MainWindow/MemoryHubDestination.swift
+  - desktop/macos/Desktop/Sources/MainWindow/Components/OmiSearchField.swift
+  - desktop/macos/Desktop/Sources/MainWindow/Pages/MemoriesPage.swift
+  - desktop/macos/Desktop/Sources/MainWindow/Pages/MemoryGraph/MemoryGraphPage.swift
+preconditions:
+  - auth_ready
+
+steps:
+  - id: S1
+    name: Open the Memory destination menu
+    do: "Click the Memory button in the top nav bar (agent-swift find text 'Memory' click). Verify its menu exposes Memories, Conversations, and Brain Map."
+    expect:
+      text_visible:
+        - Memories
+        - Conversations
+        - Brain Map
+
+  - id: S2
+    name: Select and verify Memories
+    do: "Choose Memories from the Memory menu. Verify the full-width page shows the shared search field ('Search memories'), filter buttons ('This device', 'All'), Add button, and memory rows with timestamps."
+    expect:
+      interactive_count: { min: 4 }
+
+  - id: S3
+    name: Select Conversations
+    do: "Open the Memory menu and choose Conversations. Verify the full-width Conversations page loads with the shared search field, filters, and a list grouped by date."
+    expect:
+      text_visible:
+        - Conversations
+
+  - id: S4
+    name: Verify conversation list features
+    do: "Check for Select and Quick Note buttons at the top. Verify conversation entries show title, date, duration, and star icon. Check for 'Load older conversations' at the bottom if scrolled down."
+    expect:
+      interactive_count: { min: 3 }
+
+  - id: S5
+    name: Select Brain Map
+    do: "Open the Memory menu and choose Brain Map. Verify Brain Map renders with an interactive node graph visualization showing connected entities."
+    expect:
+      text_visible:
+        - Brain Map
+
+  - id: S6
+    name: Return to Memories
+    do: "Open the Memory menu and choose Memories. Verify the memory list is visible with the shared search and filter controls."
+    expect:
+      text_visible:
+        - Memories
