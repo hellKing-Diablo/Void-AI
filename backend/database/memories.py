@@ -1008,7 +1008,7 @@ def get_memories_to_migrate(uid: str, target_level: str, *, firestore_client: An
         if target_level != current_level:
             to_migrate.append({'id': doc.id, 'type': 'memory'})
 
-    return to_migrate"""
+    return to_migrate
 
 
 def migrate_memories_level_batch(
