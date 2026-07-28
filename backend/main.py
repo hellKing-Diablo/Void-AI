@@ -4,8 +4,11 @@ import logging
 import os
 
 from utils.env_loader import load_backend_env
-#below line 8-9 added by me
+#below line 8-12 added by me
 from utils.cloud_tasks import is_listen_finalization_dispatch_configured
+if os.getenv('LOCAL_DEVELOPMENT') == 'true' and os.getenv('K_SERVICE'):
+    raise RuntimeError('LOCAL_DEVELOPMENT must never be enabled on Cloud Run')
+
 logger.info(f'listen finalization via cloud_tasks: {is_listen_finalization_dispatch_configured()}')
 
 load_backend_env()  # No-op if no env files exist (production); stage + local overrides otherwise
