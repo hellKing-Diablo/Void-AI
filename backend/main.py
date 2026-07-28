@@ -4,6 +4,9 @@ import logging
 import os
 
 from utils.env_loader import load_backend_env
+#below line 8-9 added by me
+from utils.cloud_tasks import is_listen_finalization_dispatch_configured
+logger.info(f'listen finalization via cloud_tasks: {is_listen_finalization_dispatch_configured()}')
 
 load_backend_env()  # No-op if no env files exist (production); stage + local overrides otherwise
 

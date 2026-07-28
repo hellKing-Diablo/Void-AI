@@ -28,6 +28,9 @@ import logging
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable, Coroutine, Dict, List, ParamSpec, TypeVar
+#below added by me
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +93,30 @@ async def run_blocking(executor: ThreadPoolExecutor, fn: Callable[P, T], *args: 
     call = functools.partial(ctx.run, functools.partial(fn, *args, **kwargs))
     return await loop.run_in_executor(executor, call)
 
+#below _log_future_exception function added by me
+def _log_future_exception(label: str) -> Callable[[Future], None]:
+    def _callback(future: Future) -> None:
+        try:
+            exc = future.exception()
+        except CancelledError:
+            logger.warning(f'Background task cancelled: {label}')
+            return
+        except Exception:
+            return
+        if exc is not None:
+            logger.error(f'Background task failed: {label}: {exc}', exc_info=exc)
 
+    return _callback
+
+#modified submit_with_context by me to get error in terminal properly
 def submit_with_context(
     executor: ThreadPoolExecutor, fn: Callable[P, T], *args: P.args, **kwargs: P.kwargs
 ) -> Future[T]:
     """Submit *fn* to *executor*, propagating the current contextvars (BYOK keys, etc.)."""
     ctx = contextvars.copy_context()
-    return executor.submit(ctx.run, fn, *args, **kwargs)
+    future = executor.submit(ctx.run, fn, *args, **kwargs)
+    future.add_done_callback(_log_future_exception(getattr(fn, '__qualname__', repr(fn))))
+    return future
 
 
 def get_executor_metrics() -> List[Dict[str, Any]]:
