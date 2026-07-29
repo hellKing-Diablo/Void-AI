@@ -130,12 +130,14 @@ Verified by actually using it on a Samsung phone, not by assuming:
 - ✅ Live transcription streaming to the phone as you speak
 - ✅ Conversations auto-finalize and get AI summaries and titles
 - ✅ Chat — asking questions about your own conversations
-- ✅ Action items extracted and shown on the tasks page
+- ✅ Action items extracted and shown on the tasks page — **re-verified 29 July on a freshly
+  recorded conversation**, after the composite index landed
 - ✅ Everything encrypted at rest, keys stored in Secret Manager
-- ⚠️ Daily recaps — **infrastructure deployed and the hourly job runs clean, but no recap has
-  actually been produced yet.** The first one is due on the 17:00 UTC tick (22:30 IST). Until
-  one appears, treat this as set up but unverified. You can force one immediately via
-  Settings → Daily Summary settings → generate.
+- ⚠️ Daily recaps — **still unverified as of 29 July.** Not because they fail: the hourly job
+  crashed with `ModuleNotFoundError: No module named 'utils'` until 21:28 UTC on 28 July, so the
+  17:00 UTC tick that fires local hour 22 for `Asia/Kolkata` had never once run. The job now
+  exits 0 every hour. Force one to test: **Settings → Daily Summary → ⋮ menu, top-right →
+  "Generate Summary"** — it is in the app-bar overflow menu, not on the page body.
 
 ## What it costs
 
